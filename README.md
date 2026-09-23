@@ -84,7 +84,7 @@ por alto:
 ### Instalación
 
 ```bash
-git clone <url-de-este-repo>
+git clone https://github.com/Breiner1412/Pregunta2.git
 cd anime-trivia
 npm install
 ```
@@ -146,7 +146,7 @@ supabase/schema.sql              → tablas, políticas RLS y funciones, listo p
 
 ## 🗺️ Roadmap
 
-- [ ] PWA para instalación en móvil
+- [ ] Desplegar en producción (Vercel) y enlazar la demo en vivo
 - [ ] Automatizar la generación de preguntas con un cron job
 - [ ] Historial de partidas por usuario
 

@@ -32,3 +32,15 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# archivos de configuración de agentes/IA (no forman parte de la app)
+.agents/
+.claude/
+AGENTS.md
+CLAUDE.md
+skills-lock.json
+
+# precaución: nunca subir claves en texto plano
+api.txt
+keys.txt
+secrets.txt
