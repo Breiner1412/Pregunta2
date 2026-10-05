@@ -36,16 +36,24 @@ function fallo(cuerpo: Record<string, unknown>, status: number): ResultadoGenera
   return { insertadas: 0, respuesta: NextResponse.json(cuerpo, { status }) }
 }
 
-// Lo que devuelve la API de Gemini: solo nos interesa el texto del primer candidato.
+// Lo que devuelve la API de Gemini: el texto del primer candidato y por qué
+// terminó de generar (STOP es lo normal; MAX_TOKENS significa que se cortó).
 const esquemaRespuestaGemini = z.object({
   candidates: z
     .array(
       z.object({
         content: z.object({ parts: z.array(z.object({ text: z.string() })).min(1) }),
+        finishReason: z.string().optional(),
       })
     )
     .min(1),
 })
+
+const MENSAJES_FIN_ANORMAL: Record<string, string> = {
+  MAX_TOKENS: 'La respuesta de la IA se cortó por largo; pide menos preguntas',
+  SAFETY: 'La IA bloqueó la respuesta por sus filtros de seguridad',
+  RECITATION: 'La IA bloqueó la respuesta por parecerse a contenido existente',
+}
 
 // El texto es un JSON con un lote de preguntas; cada una se valida por
 // separado para descartar solo las malas y no todo el lote.
@@ -53,7 +61,14 @@ const esquemaLoteGenerado = z.object({ preguntas: z.array(z.unknown()) })
 
 const esquemaPreguntaGenerada = z.object({
   pregunta: z.string().trim().min(1).max(300),
-  opciones: z.array(z.string().trim().min(1).max(150)).length(4),
+  // Cuatro opciones distintas: con dos iguales la pregunta es ambigua.
+  opciones: z
+    .array(z.string().trim().min(1).max(150))
+    .length(4)
+    .refine(
+      (opciones) => new Set(opciones.map((o) => o.toLocaleLowerCase('es'))).size === opciones.length,
+      'opciones repetidas'
+    ),
   respuesta_correcta: z.int().min(0).max(3),
   dificultad: z.int().min(1).max(5),
 })
@@ -236,7 +251,14 @@ ${listaExistentes.map((p) => `  - ${p}`).join('\n') || '  (ninguna todavía)'}`
     return fallo({ error: 'La IA no devolvió contenido' }, 502)
   }
 
-  const extraidas = extraerPreguntas(respuestaIa.data.candidates[0].content.parts[0].text)
+  const candidato = respuestaIa.data.candidates[0]
+  const finAnormal = candidato.finishReason && MENSAJES_FIN_ANORMAL[candidato.finishReason]
+  if (finAnormal) {
+    console.error('[generar-preguntas] Gemini terminó con', candidato.finishReason)
+    return fallo({ error: finAnormal }, 502)
+  }
+
+  const extraidas = extraerPreguntas(candidato.content.parts[0].text)
   if (!extraidas) {
     return fallo({ error: 'La IA devolvió JSON inválido' }, 502)
   }
