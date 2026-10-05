@@ -1,3 +1,4 @@
+import { z } from 'zod'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { verificarAdmin } from '@/lib/admin'
@@ -44,27 +45,47 @@ function fallo(cuerpo: Record<string, unknown>, status: number): ResultadoGenera
   return { insertadas: 0, respuesta: NextResponse.json(cuerpo, { status }) }
 }
 
-interface PreguntaGenerada {
-  pregunta: string
-  opciones: string[]
-  respuesta_correcta: number
-  dificultad: number
-}
+// Lo que devuelve la API de Gemini: solo nos interesa el texto del primer candidato.
+const esquemaRespuestaGemini = z.object({
+  candidates: z
+    .array(
+      z.object({
+        content: z.object({ parts: z.array(z.object({ text: z.string() })).min(1) }),
+      })
+    )
+    .min(1),
+})
 
-function esPreguntaValida(p: PreguntaGenerada): boolean {
-  return (
-    typeof p.pregunta === 'string' &&
-    p.pregunta.trim().length > 0 &&
-    Array.isArray(p.opciones) &&
-    p.opciones.length === 4 &&
-    p.opciones.every((o) => typeof o === 'string' && o.trim().length > 0) &&
-    Number.isInteger(p.respuesta_correcta) &&
-    p.respuesta_correcta >= 0 &&
-    p.respuesta_correcta <= 3 &&
-    Number.isInteger(p.dificultad) &&
-    p.dificultad >= 1 &&
-    p.dificultad <= 5
-  )
+// El texto es un JSON con un lote de preguntas; cada una se valida por
+// separado para descartar solo las malas y no todo el lote.
+const esquemaLoteGenerado = z.object({ preguntas: z.array(z.unknown()) })
+
+const esquemaPreguntaGenerada = z.object({
+  pregunta: z.string().trim().min(1).max(300),
+  opciones: z.array(z.string().trim().min(1).max(150)).length(4),
+  respuesta_correcta: z.int().min(0).max(3),
+  dificultad: z.int().min(1).max(5),
+})
+
+type PreguntaGenerada = z.infer<typeof esquemaPreguntaGenerada>
+
+// Devuelve las preguntas válidas del texto JSON de la IA, o null si el
+// texto no es un lote reconocible.
+function extraerPreguntas(textoJson: string): { generadas: number; validas: PreguntaGenerada[] } | null {
+  let datos: unknown
+  try {
+    datos = JSON.parse(textoJson)
+  } catch {
+    return null
+  }
+  const lote = esquemaLoteGenerado.safeParse(datos)
+  if (!lote.success) return null
+
+  const validas = lote.data.preguntas.flatMap((p) => {
+    const resultado = esquemaPreguntaGenerada.safeParse(p)
+    return resultado.success ? [resultado.data] : []
+  })
+  return { generadas: lote.data.preguntas.length, validas }
 }
 
 export async function POST(request: Request) {
@@ -209,25 +230,22 @@ ${listaExistentes.map((p) => `  - ${p}`).join('\n') || '  (ninguna todavía)'}`
     return fallo({ error: 'Error de la IA', detalle }, 502)
   }
 
-  const iaData = await iaResponse.json()
-  const textoJson = iaData.candidates?.[0]?.content?.parts?.[0]?.text
+  const iaData: unknown = await iaResponse.json().catch(() => null)
+  const respuestaIa = esquemaRespuestaGemini.safeParse(iaData)
 
-  if (!textoJson) {
+  if (!respuestaIa.success) {
     return fallo(
       { error: 'La IA no devolvió contenido', detalle: iaData },
       502
     )
   }
 
-  let parseado: { preguntas: PreguntaGenerada[] }
-  try {
-    parseado = JSON.parse(textoJson)
-  } catch {
+  const extraidas = extraerPreguntas(respuestaIa.data.candidates[0].content.parts[0].text)
+  if (!extraidas) {
     return fallo({ error: 'La IA devolvió JSON inválido' }, 502)
   }
 
-  const generadas = parseado.preguntas ?? []
-  const validas = generadas.filter(esPreguntaValida)
+  const { generadas, validas } = extraidas
 
   if (validas.length === 0) {
     return fallo(
@@ -238,7 +256,7 @@ ${listaExistentes.map((p) => `  - ${p}`).join('\n') || '  (ninguna todavía)'}`
 
   const filas = validas.map((p) => ({
     categoria_id: categoriaId,
-    pregunta: p.pregunta.trim(),
+    pregunta: p.pregunta,
     opciones: p.opciones,
     respuesta_correcta: p.respuesta_correcta,
     dificultad: p.dificultad,
@@ -264,7 +282,7 @@ ${listaExistentes.map((p) => `  - ${p}`).join('\n') || '  (ninguna todavía)'}`
     insertadas,
     respuesta: NextResponse.json({
       insertadas,
-      descartadas: generadas.length - insertadas,
+      descartadas: generadas - insertadas,
     }),
   }
 }
