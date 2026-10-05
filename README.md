@@ -1,7 +1,7 @@
 # 🎮 Anime Trivia
 
 ![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=next.js)
-![TypeScript](https://img.shields.io/badge/TypeScript-5-blue?logo=typescript)
+![TypeScript](https://img.shields.io/badge/TypeScript-6-blue?logo=typescript)
 ![Supabase](https://img.shields.io/badge/Supabase-Postgres%20%2B%20Auth-3ECF8E?logo=supabase)
 ![Tailwind](https://img.shields.io/badge/Tailwind-v4-38bdf8?logo=tailwindcss)
 ![Gemini](https://img.shields.io/badge/Gemini%20API-Structured%20Output-8E75B2?logo=googlegemini)
@@ -39,15 +39,15 @@ antes de publicar.
 - **Generación de preguntas con IA** (Gemini): un panel de administrador genera lotes de preguntas por categoría y dificultad, pendientes de aprobación antes de entrar al juego.
 - **Ranking global por categoría**: mejor puntaje individual, no acumulado — mide qué tan bien juegas, no cuánto has jugado.
 - **Login opcional**: Magic Link o contraseña, o jugar como invitado.
-- **Seguridad real, no aparente**: el navegador nunca recibe la respuesta correcta antes de responder, y el servidor recalcula el puntaje final de forma independiente.
+- **La partida vive en el servidor**: el navegador nunca recibe la respuesta correcta antes de responder y no puede escribir puntajes; el servidor mide el tiempo y lleva vidas y puntaje.
 
 ## 🤖 Cómo funciona la generación de preguntas con IA
 
 Esta es la parte que más quise cuidar:
 
-1. Un administrador elige categoría, cantidad y (opcionalmente) dificultad desde `/admin/preguntas`.
-2. El servidor arma un prompt con reglas explícitas — 4 opciones, evitar datos ambiguos, no repetir preguntas ya existentes en esa categoría — y lo envía a la API de Gemini pidiendo salida JSON con un **schema estricto** (`response_schema`). No se depende de que el modelo "prometa" devolver JSON válido: la API lo garantiza estructuralmente.
-3. Cada pregunta generada se vuelve a validar en el servidor (4 opciones no vacías, índice de respuesta correcta dentro de rango, dificultad entre 1 y 5) antes de guardarse.
+1. Un administrador elige categoría, cantidad y (opcionalmente) dificultad desde `/admin/preguntas`. El servidor verifica que sea admin y reserva su cuota diaria (`IA_LIMITE_DIARIO`); solo puede haber una generación en curso por categoría.
+2. El servidor arma un prompt con reglas explícitas — 4 opciones, evitar datos ambiguos, no repetir preguntas ya existentes en esa categoría — y lo envía a la API de Gemini (`GEMINI_MODEL`, con un timeout de 45 s) pidiendo salida JSON con un **schema estricto** (`response_schema`). No se depende de que el modelo "prometa" devolver JSON válido: la API lo garantiza estructuralmente.
+3. Cada pregunta generada se vuelve a validar en el servidor con zod (4 opciones distintas y no vacías, textos de largo acotado, índice de respuesta correcta dentro de rango, dificultad entre 1 y 5) antes de guardarse. Si Gemini corta o bloquea la respuesta, el panel lo dice; las preguntas repetidas se ignoran.
 4. Las preguntas entran a la base marcadas `revisada: false` — **no son jugables todavía**.
 5. El administrador las aprueba o rechaza una por una en el mismo panel. Solo las aprobadas entran a la rotación del juego.
 
@@ -57,13 +57,86 @@ latencia/costo en el momento de jugar, y — más importante — el riesgo real
 de que un modelo alucine datos específicos (fechas, estudios de animación,
 etc.) sin que nadie lo note antes de publicarse.
 
-## 🔐 Decisiones de seguridad
+## 🔐 Seguridad
 
-Dos cosas que muchos tutoriales de "trivia con Next.js + Supabase" pasan
-por alto:
+La regla de fondo: **el navegador no es de confiar**. La anon key de Supabase
+es pública, así que todo lo que importa se protege en la base (RLS y
+permisos) o en el servidor, nunca solo en la interfaz.
 
-- **La partida vive en el servidor.** El servidor sirve una pregunta a la vez, sin el campo `respuesta_correcta` (ver `PreguntaJuego` en `types/game.ts`), mide el tiempo con su propio reloj, corrige cada respuesta una sola vez y lleva vidas y puntaje (`api/partida`). El navegador solo dice qué opción eligió.
-- **El puntaje solo lo escribe el servidor.** Las funciones de partida de `supabase/schema.sql` solo las puede ejecutar la `service_role`, y cada paso es una transacción. El navegador no tiene permiso para escribir partidas, puntajes ni el ranking.
+### Partida y puntaje
+
+- **La partida vive en el servidor** (`app/api/partida`). El servidor:
+  - sirve una pregunta a la vez, sin el campo `respuesta_correcta` (ver `PreguntaJuego` en `types/game.ts`);
+  - mide el tiempo con su propio reloj, con un margen para la latencia;
+  - corrige cada respuesta una sola vez, solo si es la pregunta en juego;
+  - lleva vidas y puntaje.
+
+  El navegador solo dice qué opción eligió.
+- **Solo el servidor escribe partidas, puntajes y ranking.** Las funciones
+  que lo hacen (`iniciar_partida`, `servir_siguiente_pregunta`,
+  `responder_pregunta`) solo las puede ejecutar la `service_role`, y cada
+  paso es una transacción. Los roles `anon` y `authenticated` no tienen
+  permiso de escritura sobre esas tablas.
+- **Las respuestas correctas no se pueden leer** desde el navegador: la
+  tabla `preguntas` solo es legible por admins.
+
+### Admin
+
+- El rol vive en la tabla **`trivia.admins`**, no en el usuario de auth
+  (compartido con otra app). Nadie puede escribirla desde el navegador: los
+  admins se agregan con SQL.
+- `/admin` se verifica **en el servidor** (`app/admin/layout.tsx`).
+  Generar, aprobar y rechazar preguntas pasan por rutas que vuelven a
+  verificar el rol.
+
+### Base compartida
+
+- Todo vive en el esquema **`trivia`**. `schema.sql` revoca todos los
+  permisos de `anon` y `authenticated` y otorga solo lo necesario:
+  - lectura pública de categorías, perfiles y ranking;
+  - escritura del propio perfil, y solo de columnas concretas;
+  - lectura de las propias partidas.
+- Un usuario de la otra app llega como `authenticated`. Lo más que puede
+  hacer aquí es crearse un perfil y jugar: no puede tocar puntajes ni
+  hacerse admin.
+- No hay triggers sobre `auth.users`.
+
+### Secretos y límites
+
+- La `service_role` y la llave de Gemini solo existen en el servidor: van en
+  variables sin `NEXT_PUBLIC_`, y el cliente de servicio
+  (`lib/supabase/admin.ts`) está marcado `server-only`, así que el build
+  falla si un componente de cliente lo importa.
+- Las variables de entorno se validan al arrancar: si falta alguna, el
+  proceso termina con la lista de las que faltan.
+- **Límites de uso:**
+  - cuota diaria de generaciones con IA por admin y lock por categoría (`trivia.uso_ia`);
+  - rate limit en las rutas de partida;
+  - limpieza automática de partidas abandonadas y de invitado.
+
+### Entradas, errores y navegador
+
+- Todo lo que entra a las rutas se valida con **zod**, igual que la
+  respuesta de Gemini.
+- Los errores internos (de Postgres o de Gemini) se registran en el
+  servidor y al navegador llega un mensaje genérico.
+- Los redirects del login solo aceptan rutas internas, y se arman con
+  `NEXT_PUBLIC_SITE_URL` (detrás de Caddy, el host de la petición no es
+  el público).
+- Cabeceras de seguridad en todas las rutas: CSP, `X-Frame-Options`,
+  `nosniff`, `Referrer-Policy`, `Permissions-Policy` y HSTS en producción.
+
+### Límites conocidos
+
+- El rate limit vive en memoria: vale por instancia y se reinicia con el
+  contenedor. Alcanza para una sola VM; con varias réplicas haría falta un
+  almacén compartido.
+- La CSP permite scripts inline (`'unsafe-inline'`), que Next.js necesita
+  para hidratar. Evitarlo exigiría nonces y render dinámico en todas las
+  páginas.
+- Jugando se ven las respuestas correctas *después* de responder (es parte
+  del juego). Alguien con muchas partidas podría ir juntándolas; el rate
+  limit lo frena, pero no lo impide.
 
 ## 🛠️ Stack
 
@@ -77,7 +150,7 @@ por alto:
 
 ### Requisitos
 
-- Node.js 20.9+
+- Node.js 20.9+ (la imagen de Docker usa Node 22)
 - Una cuenta de [Supabase](https://supabase.com) (gratis)
 - Una API key de [Google AI Studio](https://aistudio.google.com) (gratis, sin tarjeta — solo necesaria para generar preguntas nuevas)
 
@@ -85,7 +158,7 @@ por alto:
 
 ```bash
 git clone https://github.com/Breiner1412/Pregunta2.git
-cd anime-trivia
+cd Pregunta2
 npm install
 ```
 
