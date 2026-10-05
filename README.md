@@ -16,7 +16,7 @@ contenido generado.
      Recomendado: la selección de categorías, una pregunta en juego
      mostrando el anillo de tiempo, y el panel de revisión de IA. -->
 
-🔗 **Demo en vivo:** _(agregar cuando esté desplegado en Vercel)_
+🔗 **Demo en vivo:** _(agregar cuando esté desplegado)_
 
 ## 🕹️ Qué es esto
 
@@ -71,7 +71,7 @@ por alto:
 - **Tailwind CSS v4** — sistema de diseño con tokens definidos en `@theme`
 - **Supabase** — Postgres, Auth (Magic Link + contraseña), Row Level Security
 - **Gemini API** (Google AI Studio) — generación de preguntas con salida JSON estructurada
-- Desplegable en **Vercel**
+- **Docker** (imagen `standalone` de Next.js) detrás de **Caddy**, con Supabase self-hosted
 
 ## 🚀 Cómo correrlo localmente
 
@@ -246,7 +246,7 @@ supabase/schema.sql              → tablas, políticas RLS y funciones, listo p
 
 ## 🗺️ Roadmap
 
-- [ ] Desplegar en producción (Vercel) y enlazar la demo en vivo
+- [ ] Desplegar en producción (VM con Docker + Caddy) y enlazar la demo en vivo
 - [ ] Automatizar la generación de preguntas con un cron job
 - [ ] Historial de partidas por usuario
 

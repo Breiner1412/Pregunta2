@@ -6,9 +6,6 @@ import { env } from '@/lib/env'
 import { esquemaGenerarPreguntas, leerCuerpoValidado } from '@/lib/validacion'
 import { NextResponse } from 'next/server'
 
-// Generar hasta 25 preguntas puede tardar más que el límite corto por
-// defecto de las funciones serverless en Vercel, así que se sube el máximo.
-export const maxDuration = 60
 
 const NIVEL_DESCRIPCION: Record<number, string> = {
   1: 'muy fácil, la mayoría de la gente lo sabe',
