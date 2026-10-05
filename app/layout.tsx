@@ -1,22 +1,26 @@
 import type { Metadata, Viewport } from "next";
-import { Space_Grotesk, Bungee, JetBrains_Mono } from "next/font/google";
+import localFont from "next/font/local";
 import "./globals.css";
 
-const spaceGrotesk = Space_Grotesk({
-  subsets: ["latin"],
+// Fuentes servidas desde node_modules (paquetes de Fontsource, licencia OFL)
+// en lugar de next/font/google: así el build no necesita salir a internet.
+const spaceGrotesk = localFont({
+  src: "../node_modules/@fontsource-variable/space-grotesk/files/space-grotesk-latin-wght-normal.woff2",
+  weight: "300 700",
   variable: "--font-space-grotesk",
   display: "swap",
 });
 
-const bungee = Bungee({
-  subsets: ["latin"],
+const bungee = localFont({
+  src: "../node_modules/@fontsource/bungee/files/bungee-latin-400-normal.woff2",
   weight: "400",
   variable: "--font-bungee",
   display: "swap",
 });
 
-const jetbrainsMono = JetBrains_Mono({
-  subsets: ["latin"],
+const jetbrainsMono = localFont({
+  src: "../node_modules/@fontsource-variable/jetbrains-mono/files/jetbrains-mono-latin-wght-normal.woff2",
+  weight: "100 800",
   variable: "--font-jetbrains-mono",
   display: "swap",
 });
