@@ -1,0 +1,20 @@
+# App de trivia detrás de Caddy. No publica puertos: Caddy, conectado a la
+# red externa "proxy", le llega en http://pregunta2:3000.
+#
+#   docker network create proxy   # una sola vez, si todavía no existe
+#   docker compose up -d --build
+
+services:
+  pregunta2:
+    container_name: pregunta2
+    image: pregunta2:latest
+    build:
+      context: .
+    restart: unless-stopped
+    env_file: .env
+    networks:
+      - proxy
+
+networks:
+  proxy:
+    external: true
