@@ -129,6 +129,18 @@ Supabase self-hosted de la VM, vea "URLs de redirección del login"):
 - Site URL: `http://localhost:3000`
 - Redirect URLs: `http://localhost:3000/auth/callback`
 
+### Tipos de la base
+
+`types/database.ts` se genera a partir del esquema `trivia`. Si cambia
+`supabase/schema.sql`, regenérelo contra cualquier Postgres donde lo haya
+aplicado:
+
+```bash
+npx supabase gen types typescript --schema trivia \
+  --db-url "postgresql://postgres:CLAVE@localhost:5432/postgres?sslmode=disable" \
+  > types/database.ts
+```
+
 ### Correr
 
 ```bash

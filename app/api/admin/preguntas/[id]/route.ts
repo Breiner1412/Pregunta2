@@ -1,12 +1,12 @@
 import { NextResponse } from 'next/server'
 import { verificarAdmin } from '@/lib/admin'
-import { esUuid } from '@/lib/partida'
+import { esquemaUuid } from '@/lib/validacion'
 
 type Contexto = { params: Promise<{ id: string }> }
 
 async function leerId(contexto: Contexto): Promise<string | null> {
   const { id } = await contexto.params
-  return esUuid(id) ? id : null
+  return esquemaUuid.safeParse(id).success ? id : null
 }
 
 // Aprueba una pregunta pendiente: pasa a la rotación del juego.

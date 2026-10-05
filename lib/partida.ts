@@ -3,24 +3,6 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { identificarCliente, permitirPeticion, type LimiteTasa } from '@/lib/rate-limit'
 
-const PATRON_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-
-export function esUuid(valor: unknown): valor is string {
-  return typeof valor === 'string' && PATRON_UUID.test(valor)
-}
-
-// Devuelve el cuerpo JSON si es un objeto, o null si no se pudo leer.
-export async function leerCuerpo(request: Request): Promise<Record<string, unknown> | null> {
-  try {
-    const cuerpo: unknown = await request.json()
-    if (cuerpo && typeof cuerpo === 'object' && !Array.isArray(cuerpo)) {
-      return cuerpo as Record<string, unknown>
-    }
-    return null
-  } catch {
-    return null
-  }
-}
 
 // Id del usuario con sesión, o null si juega como invitado.
 export async function obtenerUsuarioId(): Promise<string | null> {

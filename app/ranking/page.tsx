@@ -104,7 +104,7 @@ export default function RankingPage() {
 
                         const { data: posicion } = await supabase.rpc('obtener_posicion_categoria', {
                             p_usuario: usuarioId,
-                            p_categoria: categoriaActiva,
+                            p_categoria: categoriaActiva ?? undefined,
                         })
                         if (typeof posicion === 'number') setPosicionPropia(posicion)
                     }

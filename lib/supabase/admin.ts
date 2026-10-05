@@ -1,5 +1,6 @@
 import 'server-only'
 import { createClient } from '@supabase/supabase-js'
+import type { Database } from '@/types/database'
 import { ESQUEMA_DB } from './esquema'
 
 // Cliente con la service_role: ignora RLS, así que solo debe usarse en el
@@ -13,7 +14,7 @@ export function createAdminClient() {
     throw new Error('Faltan NEXT_PUBLIC_SUPABASE_URL o SUPABASE_SERVICE_ROLE_KEY')
   }
 
-  return createClient(url, serviceRoleKey, {
+  return createClient<Database>(url, serviceRoleKey, {
     db: { schema: ESQUEMA_DB },
     auth: { persistSession: false, autoRefreshToken: false },
   })

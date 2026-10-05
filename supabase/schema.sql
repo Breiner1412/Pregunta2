@@ -276,7 +276,8 @@ $$;
 
 -- Crea una partida. Un usuario de auth sin perfil de trivia (por ejemplo,
 -- alguien que solo usa la otra app) juega como invitado.
-create or replace function trivia.iniciar_partida(p_usuario uuid, p_categoria uuid)
+-- Parámetros con default null: invitado (sin usuario) y modo Mezclado (sin categoría).
+create or replace function trivia.iniciar_partida(p_usuario uuid default null, p_categoria uuid default null)
 returns uuid
 language plpgsql
 security definer
@@ -308,7 +309,7 @@ $$;
 -- Devuelve la pregunta en juego (sin la respuesta correcta). Si ya había
 -- una servida y sin responder, devuelve la misma sin reiniciar el reloj.
 -- Si no quedan preguntas, cierra la partida.
-create or replace function trivia.servir_siguiente_pregunta(p_partida uuid, p_usuario uuid)
+create or replace function trivia.servir_siguiente_pregunta(p_partida uuid, p_usuario uuid default null)
 returns jsonb
 language plpgsql
 security definer
@@ -375,11 +376,14 @@ $$;
 -- Corrige la respuesta a la pregunta en juego (una sola vez). El tiempo
 -- se mide desde que el servidor sirvió la pregunta, con un margen para
 -- la latencia de red; pasado ese margen la respuesta cuenta como fallo.
-create or replace function trivia.responder_pregunta(
+-- p_usuario null = invitado; p_respuesta null = se acabó el tiempo.
+-- (Versiones anteriores tenían otro orden de parámetros: se recrea.)
+drop function if exists trivia.responder_pregunta(uuid, uuid, uuid, int);
+create function trivia.responder_pregunta(
   p_partida uuid,
-  p_usuario uuid,
   p_pregunta uuid,
-  p_respuesta int
+  p_usuario uuid default null,
+  p_respuesta int default null
 )
 returns jsonb
 language plpgsql
@@ -517,7 +521,7 @@ $$;
 
 -- Posición exacta de un usuario dentro de una categoría (o Mezclado).
 -- Devuelve null si el usuario todavía no tiene puntaje en esa categoría.
-create or replace function trivia.obtener_posicion_categoria(p_usuario uuid, p_categoria uuid)
+create or replace function trivia.obtener_posicion_categoria(p_usuario uuid, p_categoria uuid default null)
 returns int
 language sql
 stable

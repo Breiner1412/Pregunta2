@@ -4,6 +4,21 @@ import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import type { Categoria, Pregunta } from '@/types/game'
+import type { Database } from '@/types/database'
+import { esquemaOpciones } from '@/lib/validacion'
+
+type FilaPendiente = Pick<
+  Database['trivia']['Tables']['preguntas']['Row'],
+  'id' | 'categoria_id' | 'pregunta' | 'opciones' | 'respuesta_correcta' | 'dificultad'
+>
+
+// opciones llega como jsonb: solo se muestran las filas con 4 textos.
+function aPreguntas(filas: FilaPendiente[] | null): Pregunta[] {
+  return (filas ?? []).flatMap((fila) => {
+    const opciones = esquemaOpciones.safeParse(fila.opciones)
+    return opciones.success ? [{ ...fila, opciones: opciones.data }] : []
+  })
+}
 
 // El acceso se verifica en el servidor (app/admin/layout.tsx): si esta
 // página se renderiza, la sesión es de un admin.
@@ -45,7 +60,7 @@ export default function AdminPreguntasPage() {
       .select('id, categoria_id, pregunta, opciones, respuesta_correcta, dificultad')
       .eq('revisada', false)
       .order('created_at', { ascending: false })
-    setPendientes(data ?? [])
+    setPendientes(aPreguntas(data))
     setCargandoPendientes(false)
   }, [supabase])
 
@@ -56,7 +71,7 @@ export default function AdminPreguntasPage() {
         .select('id, categoria_id, pregunta, opciones, respuesta_correcta, dificultad')
         .eq('revisada', false)
         .order('created_at', { ascending: false })
-      setPendientes(data ?? [])
+      setPendientes(aPreguntas(data))
       setCargandoPendientes(false)
     }
     cargarInicial()
@@ -119,7 +134,7 @@ export default function AdminPreguntasPage() {
   const aprobar = (id: string) => revisar(id, 'PATCH')
   const rechazar = (id: string) => revisar(id, 'DELETE')
 
-  function nombreCategoria(id: string) {
+  function nombreCategoria(id: string | null) {
     return categorias.find((c) => c.id === id)?.nombre ?? '???'
   }
 

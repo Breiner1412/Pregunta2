@@ -7,7 +7,7 @@ export interface Categoria {
 
 export interface Pregunta {
   id: string
-  categoria_id: string
+  categoria_id: string | null
   pregunta: string
   opciones: string[]
   respuesta_correcta: number
@@ -18,7 +18,7 @@ export interface Pregunta {
 // respuesta correcta, para que no se pueda ver antes de responder.
 export interface PreguntaJuego {
   id: string
-  categoria_id: string
+  categoria_id: string | null
   pregunta: string
   opciones: string[]
   dificultad: number
