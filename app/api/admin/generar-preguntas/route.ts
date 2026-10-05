@@ -225,19 +225,23 @@ ${listaExistentes.map((p) => `  - ${p}`).join('\n') || '  (ninguna todavía)'}`
     return fallo({ error: 'No se pudo contactar a la IA' }, 502)
   }
 
+  // El detalle de los errores se registra en el servidor y no se envía al
+  // navegador (puede incluir datos del proyecto de Google o de la base).
   if (!iaResponse.ok) {
-    const detalle = await iaResponse.text()
-    return fallo({ error: 'Error de la IA', detalle }, 502)
+    console.error('[generar-preguntas] Gemini respondió', iaResponse.status, await iaResponse.text())
+    const mensaje =
+      iaResponse.status === 429
+        ? 'Se agotó la cuota de la API de Gemini, intenta más tarde'
+        : 'Error de la IA'
+    return fallo({ error: mensaje }, 502)
   }
 
   const iaData: unknown = await iaResponse.json().catch(() => null)
   const respuestaIa = esquemaRespuestaGemini.safeParse(iaData)
 
   if (!respuestaIa.success) {
-    return fallo(
-      { error: 'La IA no devolvió contenido', detalle: iaData },
-      502
-    )
+    console.error('[generar-preguntas] respuesta inesperada de Gemini', JSON.stringify(iaData))
+    return fallo({ error: 'La IA no devolvió contenido' }, 502)
   }
 
   const extraidas = extraerPreguntas(respuestaIa.data.candidates[0].content.parts[0].text)
@@ -273,7 +277,8 @@ ${listaExistentes.map((p) => `  - ${p}`).join('\n') || '  (ninguna todavía)'}`
     .select('id')
 
   if (errorInsert) {
-    return fallo({ error: errorInsert.message }, 500)
+    console.error('[generar-preguntas] insert', errorInsert)
+    return fallo({ error: 'No se pudieron guardar las preguntas' }, 500)
   }
 
   const insertadas = nuevas?.length ?? 0

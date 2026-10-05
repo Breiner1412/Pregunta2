@@ -96,12 +96,7 @@ export default function AdminPreguntasPage() {
       const data = await res.json()
 
       if (!res.ok) {
-        const detalle = data.detalle
-          ? typeof data.detalle === 'string'
-            ? data.detalle
-            : JSON.stringify(data.detalle)
-          : ''
-        setMensaje(`Error: ${data.error ?? 'desconocido'}${detalle ? ` — ${detalle}` : ''}`)
+        setMensaje(`Error: ${data.error ?? 'desconocido'}`)
       } else {
         setMensaje(`Se generaron ${data.insertadas} preguntas nuevas para revisar.`)
         cargarPendientes()
