@@ -7,6 +7,14 @@
 --
 -- Después de correrlo, agregue "trivia" a PGRST_DB_SCHEMAS en el
 -- Supabase self-hosted para que la API REST lo exponga.
+--
+-- Auth compartido: auth.users es común a esta app y a la otra.
+--   * No se crea NINGÚN trigger sobre auth.users: se dispararía con
+--     cada registro de la otra app. El perfil de trivia lo crea el
+--     propio usuario al entrar por primera vez (completar-perfil).
+--   * trivia.perfiles referencia auth.users con on delete cascade: si
+--     un usuario se elimina desde la otra app, también se borran su
+--     perfil, sus partidas y su ranking aquí.
 -- ============================================================
 
 create schema if not exists trivia;

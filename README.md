@@ -102,6 +102,11 @@ La URL y la key de Supabase están en **Project Settings → Data API** y
 
 ### Base de datos
 
+> Todo vive en el esquema `trivia`, porque la base y el login (auth) se
+> comparten con otra app. Por eso el script no crea triggers sobre
+> `auth.users`, y si un usuario se elimina desde la otra app, sus datos
+> de trivia se borran en cascada.
+
 Ejecute el contenido completo de [`supabase/schema.sql`](./supabase/schema.sql)
 en el **SQL Editor** de su proyecto de Supabase — crea todas las tablas,
 políticas de seguridad (RLS) y funciones necesarias.
