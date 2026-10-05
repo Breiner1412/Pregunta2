@@ -47,13 +47,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'No autenticado' }, { status: 401 })
   }
 
-  const { data: perfil } = await supabase
-    .from('perfiles')
-    .select('es_admin')
-    .eq('id', user.id)
-    .maybeSingle()
+  const { data: esAdmin } = await supabase.rpc('es_admin')
 
-  if (!perfil?.es_admin) {
+  if (esAdmin !== true) {
     return NextResponse.json({ error: 'No autorizado' }, { status: 403 })
   }
 

@@ -109,14 +109,13 @@ export default function JugarPage() {
       } = await supabase.auth.getUser()
 
       if (user) {
-        const { data: perfil } = await supabase
-          .from('perfiles')
-          .select('nombre_usuario, es_admin')
-          .eq('id', user.id)
-          .maybeSingle()
+        const [{ data: perfil }, { data: esAdmin }] = await Promise.all([
+          supabase.from('perfiles').select('nombre_usuario').eq('id', user.id).maybeSingle(),
+          supabase.rpc('es_admin'),
+        ])
 
         if (perfil) {
-          setUsuario({ id: user.id, nombreUsuario: perfil.nombre_usuario, esAdmin: perfil.es_admin })
+          setUsuario({ id: user.id, nombreUsuario: perfil.nombre_usuario, esAdmin: esAdmin === true })
         }
       }
       setCargandoSesion(false)

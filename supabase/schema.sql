@@ -54,8 +54,15 @@ create table if not exists trivia.perfiles (
   avatar_url text,
   puntaje_total integer default 0,
   partidas_jugadas integer default 0,
-  es_admin boolean not null default false,
   created_at timestamptz default now()
+);
+
+-- El rol de admin NO sale de auth (que es compartido con la otra app),
+-- sino de esta tabla. Nadie puede escribirla desde el navegador: los
+-- admins se agregan a mano con SQL (ver el final del archivo).
+create table if not exists trivia.admins (
+  usuario_id uuid primary key references auth.users(id) on delete cascade,
+  created_at timestamptz not null default now()
 );
 
 create table if not exists trivia.partidas (
@@ -120,6 +127,20 @@ create unique index if not exists idx_preguntas_categoria_texto
 -- Todas fijan search_path vacío y califican cada nombre, para que no
 -- dependan del search_path de quien las llama.
 
+-- ¿El usuario de la sesión actual es admin de trivia? Es security definer
+-- para poder usarse dentro de las políticas sin abrir la tabla admins.
+create or replace function trivia.es_admin()
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (
+    select 1 from trivia.admins where usuario_id = (select auth.uid())
+  );
+$$;
+
 -- Registra el puntaje solo si es un nuevo récord para esa categoría
 -- (o modo Mezclado si p_categoria es null), y siempre suma la partida jugada.
 create or replace function trivia.registrar_mejor_puntaje(p_usuario uuid, p_categoria uuid, p_puntaje int)
@@ -163,6 +184,13 @@ $$;
 -- ============================================
 
 alter table trivia.categorias disable row level security;
+
+alter table trivia.admins enable row level security;
+
+drop policy if exists "Cada usuario ve solo su propia fila de admin" on trivia.admins;
+create policy "Cada usuario ve solo su propia fila de admin"
+on trivia.admins for select
+using ((select auth.uid()) = usuario_id);
 
 alter table trivia.perfiles enable row level security;
 
@@ -209,21 +237,21 @@ drop policy if exists "Solo administradores pueden insertar preguntas" on trivia
 create policy "Solo administradores pueden insertar preguntas"
 on trivia.preguntas for insert
 with check (
-  exists (select 1 from trivia.perfiles where id = (select auth.uid()) and es_admin = true)
+  (select trivia.es_admin())
 );
 
 drop policy if exists "Solo administradores pueden actualizar preguntas" on trivia.preguntas;
 create policy "Solo administradores pueden actualizar preguntas"
 on trivia.preguntas for update
 using (
-  exists (select 1 from trivia.perfiles where id = (select auth.uid()) and es_admin = true)
+  (select trivia.es_admin())
 );
 
 drop policy if exists "Solo administradores pueden eliminar preguntas" on trivia.preguntas;
 create policy "Solo administradores pueden eliminar preguntas"
 on trivia.preguntas for delete
 using (
-  exists (select 1 from trivia.perfiles where id = (select auth.uid()) and es_admin = true)
+  (select trivia.es_admin())
 );
 
 
@@ -237,6 +265,9 @@ grant usage on schema trivia to anon, authenticated, service_role;
 
 grant all on all tables in schema trivia to anon, authenticated, service_role;
 grant execute on all functions in schema trivia to anon, authenticated, service_role;
+
+-- La lista de admins nunca se escribe desde el navegador.
+revoke insert, update, delete, truncate on trivia.admins from anon, authenticated;
 
 
 -- ============================================
@@ -278,8 +309,13 @@ join trivia.categorias c on c.slug = v.slug
 on conflict (categoria_id, pregunta) do nothing;
 
 
--- Hágase admin usted mismo (reemplace por su nombre de usuario):
--- update trivia.perfiles set es_admin = true where nombre_usuario = 'SU_USUARIO_AQUI';
+-- Columna de una versión anterior: el rol de admin ya no vive en perfiles.
+alter table trivia.perfiles drop column if exists es_admin;
+
+-- Hágase admin usted mismo (reemplace por su correo):
+-- insert into trivia.admins (usuario_id)
+-- select id from auth.users where email = 'SU_CORREO_AQUI'
+-- on conflict do nothing;
 
 -- Pide a PostgREST que recargue el esquema.
 notify pgrst, 'reload schema';

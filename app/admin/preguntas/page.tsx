@@ -35,13 +35,9 @@ export default function AdminPreguntasPage() {
         return
       }
 
-      const { data: perfil } = await supabase
-        .from('perfiles')
-        .select('es_admin')
-        .eq('id', user.id)
-        .maybeSingle()
+      const { data: esAdminDb } = await supabase.rpc('es_admin')
 
-      if (!perfil?.es_admin) {
+      if (esAdminDb !== true) {
         router.replace('/jugar')
         return
       }

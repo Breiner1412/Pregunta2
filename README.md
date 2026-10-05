@@ -114,8 +114,13 @@ políticas de seguridad (RLS) y funciones necesarias.
 Hágase administrador para poder generar preguntas:
 
 ```sql
-update trivia.perfiles set es_admin = true where nombre_usuario = 'su_usuario';
+insert into trivia.admins (usuario_id)
+select id from auth.users where email = 'su_correo@ejemplo.com'
+on conflict do nothing;
 ```
+
+El rol de admin vive en la tabla `trivia.admins`, no en el usuario de auth:
+nadie puede escribirla desde el navegador.
 
 Configure en Supabase → **Authentication → URL Configuration**:
 
