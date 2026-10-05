@@ -146,22 +146,10 @@ as $$
   );
 $$;
 
--- Registra el puntaje solo si es un nuevo récord para esa categoría
--- (o modo Mezclado si p_categoria es null), y siempre suma la partida jugada.
-create or replace function trivia.registrar_mejor_puntaje(p_usuario uuid, p_categoria uuid, p_puntaje int)
-returns void
-language sql
-security invoker
-set search_path = ''
-as $$
-  insert into trivia.mejores_puntajes (usuario_id, categoria_id, mejor_puntaje, partidas_jugadas)
-  values (p_usuario, p_categoria, p_puntaje, 1)
-  on conflict (usuario_id, coalesce(categoria_id, '00000000-0000-0000-0000-000000000000'::uuid))
-  do update set
-    mejor_puntaje = greatest(trivia.mejores_puntajes.mejor_puntaje, excluded.mejor_puntaje),
-    partidas_jugadas = trivia.mejores_puntajes.partidas_jugadas + 1,
-    updated_at = now();
-$$;
+-- Versiones anteriores dejaban registrar el mejor puntaje desde el navegador
+-- con cualquier valor. Ahora solo lo hace _finalizar_partida.
+drop function if exists trivia.registrar_mejor_puntaje(uuid, uuid, int);
+drop function if exists trivia.incrementar_puntaje_usuario(uuid, int);
 
 -- --------------------------------------------
 -- Partida con estado en el servidor
@@ -497,15 +485,10 @@ create policy "Mejores puntajes son públicos para lectura"
 on trivia.mejores_puntajes for select
 using (true);
 
+-- Sin políticas de insert/update: el mejor puntaje solo lo escribe el
+-- servidor al cerrar una partida.
 drop policy if exists "Usuarios pueden insertar su propio mejor puntaje" on trivia.mejores_puntajes;
-create policy "Usuarios pueden insertar su propio mejor puntaje"
-on trivia.mejores_puntajes for insert
-with check ((select auth.uid()) = usuario_id);
-
 drop policy if exists "Usuarios pueden actualizar su propio mejor puntaje" on trivia.mejores_puntajes;
-create policy "Usuarios pueden actualizar su propio mejor puntaje"
-on trivia.mejores_puntajes for update
-using ((select auth.uid()) = usuario_id);
 
 alter table trivia.preguntas enable row level security;
 
@@ -562,6 +545,9 @@ revoke insert, update, delete, truncate on trivia.categorias from anon, authenti
 -- Las partidas y sus respuestas solo las escribe el servidor (service_role).
 revoke insert, update, delete, truncate on trivia.partidas, trivia.respuestas_partida
   from anon, authenticated;
+
+-- El ranking solo lo escribe el servidor (service_role).
+revoke insert, update, delete, truncate on trivia.mejores_puntajes from anon, authenticated;
 
 -- El flujo de partida solo lo ejecuta el servidor.
 revoke execute on function
