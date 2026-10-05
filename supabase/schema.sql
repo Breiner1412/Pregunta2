@@ -62,7 +62,7 @@ create table if not exists trivia.partidas (
   id uuid primary key default gen_random_uuid(),
   usuario_id uuid references trivia.perfiles(id) on delete set null,
   modo text not null default 'mixto',
-  categoria_id uuid references trivia.categorias(id),
+  categoria_id uuid references trivia.categorias(id) on delete set null,
   puntaje integer not null default 0,
   preguntas_correctas integer default 0,
   preguntas_totales integer default 0,
@@ -73,7 +73,7 @@ create table if not exists trivia.partidas (
 create table if not exists trivia.respuestas_partida (
   id uuid primary key default gen_random_uuid(),
   partida_id uuid references trivia.partidas(id) on delete cascade,
-  pregunta_id uuid references trivia.preguntas(id),
+  pregunta_id uuid references trivia.preguntas(id) on delete set null,
   respuesta_dada integer,
   correcta boolean not null,
   tiempo_respuesta_ms integer,
