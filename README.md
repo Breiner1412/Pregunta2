@@ -123,7 +123,8 @@ on conflict do nothing;
 El rol de admin vive en la tabla `trivia.admins`, no en el usuario de auth:
 nadie puede escribirla desde el navegador.
 
-Configure en Supabase → **Authentication → URL Configuration**:
+Configure en Supabase → **Authentication → URL Configuration** (en el
+Supabase self-hosted de la VM, vea "URLs de redirección del login"):
 
 - Site URL: `http://localhost:3000`
 - Redirect URLs: `http://localhost:3000/auth/callback`
@@ -193,6 +194,29 @@ docker compose up -d rest
 `schema.sql` ya otorga los permisos del esquema (`USAGE`, tablas y
 funciones) a `anon`, `authenticated` y `service_role`, y al final pide a
 PostgREST que recargue el esquema (`notify pgrst, 'reload schema'`).
+
+### Supabase self-hosted: URLs de redirección del login
+
+El auth (GoTrue) es compartido con la otra app, así que su `SITE_URL` puede
+seguir siendo la de esa app. Lo que hace falta es que GoTrue **acepte** el
+callback de esta: el magic link pide volver a
+`NEXT_PUBLIC_SITE_URL/auth/callback`, y si esa URL no está permitida GoTrue
+la ignora y manda al usuario al `SITE_URL` (la otra app). En el `.env` del
+Supabase self-hosted, agréguela a la lista (separada por comas):
+
+```env
+ADDITIONAL_REDIRECT_URLS=https://otra-app.tudominio.com/**,https://trivia.tudominio.com/auth/callback
+```
+
+Reinicie el servicio de auth:
+
+```bash
+docker compose up -d auth
+```
+
+Para enviar los magic links también hace falta un SMTP propio en ese mismo
+`.env` (`SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`,
+`SMTP_ADMIN_EMAIL`, `SMTP_SENDER_NAME`).
 
 ## 📁 Estructura
 
