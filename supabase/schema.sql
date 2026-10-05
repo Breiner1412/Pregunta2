@@ -29,9 +29,9 @@ create table if not exists trivia.categorias (
   nombre text not null,
   slug text unique not null,
   grupo text not null default 'general',
-  activa boolean default true,
-  orden integer default 0,
-  created_at timestamptz default now()
+  activa boolean not null default true,
+  orden integer not null default 0,
+  created_at timestamptz not null default now()
 );
 
 create table if not exists trivia.preguntas (
@@ -112,7 +112,7 @@ create table if not exists trivia.mejores_puntajes (
   partidas_jugadas integer not null default 0 check (partidas_jugadas >= 0),
   categoria_clave uuid not null generated always as
     (coalesce(categoria_id, '00000000-0000-0000-0000-000000000000'::uuid)) stored,
-  updated_at timestamptz default now()
+  updated_at timestamptz not null default now()
 );
 
 
@@ -129,6 +129,20 @@ create table if not exists trivia.uso_ia (
   created_at timestamptz not null default now(),
   finalizada_at timestamptz
 );
+
+
+-- Bases creadas con una versión anterior de este script: "create table if
+-- not exists" no cambia tablas existentes, así que las columnas que pasaron
+-- a not null se ajustan aquí (rellenando antes los null que hubiera).
+update trivia.categorias set activa = true where activa is null;
+update trivia.categorias set orden = 0 where orden is null;
+update trivia.categorias set created_at = now() where created_at is null;
+update trivia.mejores_puntajes set updated_at = now() where updated_at is null;
+alter table trivia.categorias
+  alter column activa set not null,
+  alter column orden set not null,
+  alter column created_at set not null;
+alter table trivia.mejores_puntajes alter column updated_at set not null;
 
 
 -- ============================================

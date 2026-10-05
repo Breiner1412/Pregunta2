@@ -23,30 +23,30 @@ export type Database = {
       }
       categorias: {
         Row: {
-          activa: boolean | null
-          created_at: string | null
+          activa: boolean
+          created_at: string
           grupo: string
           id: string
           nombre: string
-          orden: number | null
+          orden: number
           slug: string
         }
         Insert: {
-          activa?: boolean | null
-          created_at?: string | null
+          activa?: boolean
+          created_at?: string
           grupo?: string
           id?: string
           nombre: string
-          orden?: number | null
+          orden?: number
           slug: string
         }
         Update: {
-          activa?: boolean | null
-          created_at?: string | null
+          activa?: boolean
+          created_at?: string
           grupo?: string
           id?: string
           nombre?: string
-          orden?: number | null
+          orden?: number
           slug?: string
         }
         Relationships: []
@@ -58,7 +58,7 @@ export type Database = {
           id: string
           mejor_puntaje: number
           partidas_jugadas: number
-          updated_at: string | null
+          updated_at: string
           usuario_id: string
         }
         Insert: {
@@ -67,7 +67,7 @@ export type Database = {
           id?: string
           mejor_puntaje?: number
           partidas_jugadas?: number
-          updated_at?: string | null
+          updated_at?: string
           usuario_id: string
         }
         Update: {
@@ -76,7 +76,7 @@ export type Database = {
           id?: string
           mejor_puntaje?: number
           partidas_jugadas?: number
-          updated_at?: string | null
+          updated_at?: string
           usuario_id?: string
         }
         Relationships: [
