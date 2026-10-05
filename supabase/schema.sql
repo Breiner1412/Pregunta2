@@ -183,7 +183,12 @@ $$;
 -- Row Level Security
 -- ============================================
 
-alter table trivia.categorias disable row level security;
+alter table trivia.categorias enable row level security;
+
+drop policy if exists "Categorías son públicas para lectura" on trivia.categorias;
+create policy "Categorías son públicas para lectura"
+on trivia.categorias for select
+using (true);
 
 alter table trivia.admins enable row level security;
 
@@ -275,6 +280,9 @@ revoke insert, update, delete, truncate on trivia.admins from anon, authenticate
 revoke insert, update, delete, truncate on trivia.perfiles from anon, authenticated;
 grant insert (id, nombre_usuario, avatar_url) on trivia.perfiles to authenticated;
 grant update (nombre_usuario, avatar_url) on trivia.perfiles to authenticated;
+
+-- Las categorías solo se leen desde el navegador.
+revoke insert, update, delete, truncate on trivia.categorias from anon, authenticated;
 
 
 -- ============================================
