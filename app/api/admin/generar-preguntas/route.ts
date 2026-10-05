@@ -195,7 +195,7 @@ ${listaExistentes.map((p) => `  - ${p}`).join('\n') || '  (ninguna todavía)'}`
   let iaResponse: Response
   try {
     iaResponse = await fetch(
-      'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent',
+      `https://generativelanguage.googleapis.com/v1beta/models/${env().GEMINI_MODEL}:generateContent`,
       {
         method: 'POST',
         headers: {

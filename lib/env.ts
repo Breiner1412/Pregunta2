@@ -14,6 +14,11 @@ const esquemaEnv = z.object({
   NEXT_PUBLIC_SITE_URL: esProduccion ? z.url() : z.url().optional(),
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(1),
   GEMINI_API_KEY: z.string().min(1),
+  // Código del modelo, tal como aparece en la API (models/<código>).
+  GEMINI_MODEL: z
+    .string()
+    .regex(/^[a-z0-9.-]+$/, 'código de modelo inválido')
+    .default('gemini-3.6-flash'),
   // Generaciones con IA por admin y por día.
   IA_LIMITE_DIARIO: z.coerce.number().int().positive().default(10),
 })
