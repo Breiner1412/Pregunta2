@@ -1,0 +1,32 @@
+# App de trivia detrás de Caddy. No publica puertos: Caddy, conectado a la
+# red externa "proxy", le llega en http://pregunta2:3000.
+#
+#   docker network create proxy   # una sola vez, si todavía no existe
+#   docker compose up -d --build
+
+services:
+  pregunta2:
+    container_name: pregunta2
+    image: pregunta2:latest
+    build:
+      context: .
+      # Se incrustan en el bundle del navegador al compilar: si cambian,
+      # hay que reconstruir la imagen (docker compose up -d --build).
+      args:
+        NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL:?falta en .env}
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY:?falta en .env}
+        NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL:?falta en .env}
+    restart: unless-stopped
+    env_file: .env
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    networks:
+      - proxy
+
+networks:
+  proxy:
+    external: true

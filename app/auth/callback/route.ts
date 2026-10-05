@@ -1,10 +1,15 @@
 import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
+import { rutaInternaSegura } from '@/lib/redireccion'
+import { urlDelSitio } from '@/lib/sitio'
 
 export async function GET(request: Request) {
-  const { searchParams, origin } = new URL(request.url)
+  const { searchParams, origin: origenRecibido } = new URL(request.url)
+  // Detrás de Caddy, request.url trae el host interno del contenedor.
+  const origin = urlDelSitio(origenRecibido)
   const code = searchParams.get('code')
-  const next = searchParams.get('next') ?? '/jugar'
+  // Solo rutas internas: ?next=@evil.com no debe sacar al usuario del sitio.
+  const next = rutaInternaSegura(searchParams.get('next'))
 
   if (code) {
     const supabase = await createClient()

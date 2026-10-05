@@ -1,13 +1,18 @@
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
+import type { Database } from '@/types/database'
+import { ESQUEMA_DB } from './esquema'
 
+// Usa la misma URL pública que el navegador (no la interna de Docker): la
+// cookie de sesión se nombra a partir de ese host y ambos deben coincidir.
 export async function createClient() {
   const cookieStore = await cookies()
 
-  return createServerClient(
+  return createServerClient<Database>(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
+      db: { schema: ESQUEMA_DB },
       cookies: {
         getAll() {
           return cookieStore.getAll()

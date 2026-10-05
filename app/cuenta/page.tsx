@@ -9,7 +9,7 @@ const inputClass =
   'w-full p-3 rounded-xl bg-ink border border-white/10 text-paper placeholder:text-ink-soft focus:border-accent focus:outline-none transition'
 
 export default function CuentaPage() {
-  const supabase = createClient()
+  const [supabase] = useState(createClient)
   const router = useRouter()
 
   const [cargando, setCargando] = useState(true)
@@ -45,8 +45,7 @@ export default function CuentaPage() {
       setCargando(false)
     }
     cargar()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [supabase, router])
 
   async function guardarPassword(e: React.FormEvent) {
     e.preventDefault()

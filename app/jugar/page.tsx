@@ -3,13 +3,30 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
-import type { Categoria, PreguntaJuego, EstadoJuego, RespuestaUsuario } from '@/types/game'
+import type {
+  Categoria,
+  PreguntaJuego,
+  EstadoJuego,
+  PasoPartida,
+  PartidaIniciada,
+  RespuestaVerificada,
+  ResultadoPartida,
+} from '@/types/game'
 
 const DURACION_PREGUNTA_MS = 15000
 const VIDAS_INICIALES = 3
 
-type EstadoGuardado = 'idle' | 'guardando' | 'guardado' | 'error'
 type MotivoFin = 'vidas' | 'preguntas' | null
+
+async function postJson<T>(url: string, cuerpo: unknown): Promise<T> {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(cuerpo),
+  })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return (await res.json()) as T
+}
 
 function Corazon({ activo }: { activo: boolean }) {
   return (
@@ -59,35 +76,39 @@ function AnilloTiempo({ tiempoRestante, segundos }: { tiempoRestante: number; se
 }
 
 export default function JugarPage() {
-  const supabase = createClient()
+  const [supabase] = useState(createClient)
 
   const [estado, setEstado] = useState<EstadoJuego>('seleccion')
   const [categorias, setCategorias] = useState<Categoria[]>([])
-  const [categoriaSeleccionada, setCategoriaSeleccionada] = useState<string | null>(null)
 
-  const [preguntas, setPreguntas] = useState<PreguntaJuego[]>([])
-  const [indiceActual, setIndiceActual] = useState(0)
-  const [respuestas, setRespuestas] = useState<RespuestaUsuario[]>([])
+  // La partida vive en el servidor: aquí solo se refleja lo que él responde.
+  const [partidaId, setPartidaId] = useState<string | null>(null)
+  const [pregunta, setPregunta] = useState<PreguntaJuego | null>(null)
+  const [numeroPregunta, setNumeroPregunta] = useState(1)
   const [vidas, setVidas] = useState(VIDAS_INICIALES)
+  const [puntaje, setPuntaje] = useState(0)
   const [motivoFin, setMotivoFin] = useState<MotivoFin>(null)
+  const [resultadoFinal, setResultadoFinal] = useState<ResultadoPartida | null>(null)
+  const [resultadoPendiente, setResultadoPendiente] = useState<ResultadoPartida | null>(null)
 
   const [tiempoRestante, setTiempoRestante] = useState(DURACION_PREGUNTA_MS)
+  const [inicioPregunta, setInicioPregunta] = useState<number>(0)
   const [respuestaSeleccionada, setRespuestaSeleccionada] = useState<number | null>(null)
   const [respuestaCorrectaRevelada, setRespuestaCorrectaRevelada] = useState<number | null>(null)
   const [mostrandoResultadoPregunta, setMostrandoResultadoPregunta] = useState(false)
   const [verificando, setVerificando] = useState(false)
+  const [cargando, setCargando] = useState(false)
+  const [errorJuego, setErrorJuego] = useState('')
   const respondiendoRef = useRef(false)
-
-  const [inicioPregunta, setInicioPregunta] = useState<number>(0)
-  const [estadoGuardado, setEstadoGuardado] = useState<EstadoGuardado>('idle')
-  const [resultadoFinal, setResultadoFinal] = useState<{ correctas: number; puntaje: number } | null>(
-    null
-  )
+  const tiempoAgotadoEnviadoRef = useRef(false)
 
   const [usuario, setUsuario] = useState<{ id: string; nombreUsuario: string; esAdmin: boolean } | null>(
     null
   )
   const [cargandoSesion, setCargandoSesion] = useState(true)
+  // Sesión iniciada pero sin perfil de trivia (por ejemplo, alguien que viene
+  // de la otra app): juega como invitado hasta que complete su perfil.
+  const [sinPerfil, setSinPerfil] = useState(false)
 
   useEffect(() => {
     async function cargarCategorias() {
@@ -99,8 +120,7 @@ export default function JugarPage() {
       if (data) setCategorias(data)
     }
     cargarCategorias()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [supabase])
 
   useEffect(() => {
     async function cargarSesion() {
@@ -109,206 +129,143 @@ export default function JugarPage() {
       } = await supabase.auth.getUser()
 
       if (user) {
-        const { data: perfil } = await supabase
-          .from('perfiles')
-          .select('nombre_usuario, es_admin')
-          .eq('id', user.id)
-          .maybeSingle()
+        const [{ data: perfil }, { data: esAdmin }] = await Promise.all([
+          supabase.from('perfiles').select('nombre_usuario').eq('id', user.id).maybeSingle(),
+          supabase.rpc('es_admin'),
+        ])
 
         if (perfil) {
-          setUsuario({ id: user.id, nombreUsuario: perfil.nombre_usuario, esAdmin: perfil.es_admin })
+          setUsuario({ id: user.id, nombreUsuario: perfil.nombre_usuario, esAdmin: esAdmin === true })
+        } else {
+          setSinPerfil(true)
         }
       }
       setCargandoSesion(false)
     }
     cargarSesion()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [supabase])
 
   async function cerrarSesion() {
     await supabase.auth.signOut()
     setUsuario(null)
+    setSinPerfil(false)
   }
 
-  async function guardarPartida(respuestasFinal: RespuestaUsuario[], categoriaId: string | null) {
-    if (respuestasFinal.length === 0) return
+  function finalizar(resultado: ResultadoPartida, motivo: MotivoFin) {
+    setResultadoFinal(resultado)
+    setMotivoFin(motivo)
+    setEstado('resultado')
+  }
 
-    setEstadoGuardado('guardando')
-
-    try {
-      const res = await fetch('/api/guardar-partida', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          categoria_id: categoriaId,
-          respuestas: respuestasFinal.map((r) => ({
-            pregunta_id: r.pregunta_id,
-            respuesta_dada: r.respuesta_dada,
-            tiempo_respuesta_ms: r.tiempo_respuesta_ms,
-          })),
-        }),
-      })
-      const data = await res.json()
-
-      if (!res.ok) {
-        setEstadoGuardado('error')
+  function aplicarPaso(paso: PasoPartida) {
+    if (paso.terminada) {
+      // Sin ninguna respuesta: la categoría no tenía preguntas.
+      if (paso.resultado.total_respondidas === 0) {
+        setPregunta(null)
         return
       }
-
-      setResultadoFinal({ correctas: data.correctas, puntaje: data.puntaje })
-      setEstadoGuardado('guardado')
-    } catch {
-      setEstadoGuardado('error')
-    }
-  }
-
-  async function iniciarPartida(categoriaId: string | null) {
-    // Nunca se pide respuesta_correcta aquí: el navegador no debe conocerla
-    // hasta después de responder cada pregunta.
-    let query = supabase
-      .from('preguntas')
-      .select('id, categoria_id, pregunta, opciones, dificultad')
-      .eq('activa', true)
-      .eq('revisada', true)
-
-    if (categoriaId) query = query.eq('categoria_id', categoriaId)
-
-    const { data, error } = await query
-    if (error || !data) return
-
-    const porDificultad: Record<number, PreguntaJuego[]> = {}
-    data.forEach((p) => {
-      porDificultad[p.dificultad] = porDificultad[p.dificultad] || []
-      porDificultad[p.dificultad].push(p)
-    })
-
-    const nivelesOrdenados = Object.keys(porDificultad)
-      .map(Number)
-      .sort((a, b) => a - b)
-
-    const seleccionadas: PreguntaJuego[] = []
-    let nivelIdx = 0
-    let intentosSinExito = 0
-
-    while (seleccionadas.length < data.length && nivelesOrdenados.length > 0) {
-      const nivel = nivelesOrdenados[nivelIdx % nivelesOrdenados.length]
-      const disponibles = porDificultad[nivel].filter(
-        (p) => !seleccionadas.some((s) => s.id === p.id)
-      )
-      if (disponibles.length > 0) {
-        const azar = disponibles[Math.floor(Math.random() * disponibles.length)]
-        seleccionadas.push(azar)
-        intentosSinExito = 0
-      } else {
-        intentosSinExito++
-      }
-      nivelIdx++
-      if (intentosSinExito > nivelesOrdenados.length) break
+      finalizar(paso.resultado, 'preguntas')
+      return
     }
 
-    setPreguntas(seleccionadas)
-    setCategoriaSeleccionada(categoriaId)
-    setIndiceActual(0)
-    setRespuestas([])
-    setVidas(VIDAS_INICIALES)
-    setMotivoFin(null)
-    setResultadoFinal(null)
-    setEstadoGuardado('idle')
-    setEstado('jugando')
+    setPregunta(paso.pregunta)
+    setNumeroPregunta(paso.numero)
+    setVidas(paso.vidas)
+    setPuntaje(paso.puntaje)
     setInicioPregunta(Date.now())
     setTiempoRestante(DURACION_PREGUNTA_MS)
     setRespuestaSeleccionada(null)
     setRespuestaCorrectaRevelada(null)
     setMostrandoResultadoPregunta(false)
+    tiempoAgotadoEnviadoRef.current = false
+  }
+
+  async function iniciarPartida(categoriaId: string | null) {
+    if (cargando) return
+    setCargando(true)
+    setErrorJuego('')
+
+    try {
+      const partida = await postJson<PartidaIniciada>('/api/partida', { categoria_id: categoriaId })
+      setPartidaId(partida.partida_id)
+      setMotivoFin(null)
+      setResultadoFinal(null)
+      setResultadoPendiente(null)
+      setEstado('jugando')
+      aplicarPaso(partida)
+    } catch {
+      setErrorJuego('No se pudo iniciar la partida. Intenta de nuevo.')
+    } finally {
+      setCargando(false)
+    }
   }
 
   const registrarRespuesta = useCallback(
     async (indiceRespuesta: number | null) => {
-      const preguntaActual = preguntas[indiceActual]
-      if (!preguntaActual || mostrandoResultadoPregunta || respondiendoRef.current) return
+      if (!pregunta || !partidaId || mostrandoResultadoPregunta || respondiendoRef.current) return
       respondiendoRef.current = true
       setVerificando(true)
-
-      const tiempoTranscurrido = Date.now() - inicioPregunta
-
-      let esCorrecta = false
-      let respuestaCorrectaServidor: number | null = null
+      setErrorJuego('')
 
       try {
-        const res = await fetch('/api/responder', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({
-            pregunta_id: preguntaActual.id,
-            respuesta_dada: indiceRespuesta,
-          }),
-        })
-        const data = await res.json()
-        esCorrecta = Boolean(data.correcta)
-        respuestaCorrectaServidor = typeof data.respuesta_correcta === 'number' ? data.respuesta_correcta : null
-      } catch {
-        esCorrecta = false
-      }
-
-      setRespuestas((prev) => [
-        ...prev,
-        {
-          pregunta_id: preguntaActual.id,
+        const verificada = await postJson<RespuestaVerificada>('/api/partida/responder', {
+          partida_id: partidaId,
+          pregunta_id: pregunta.id,
           respuesta_dada: indiceRespuesta,
-          correcta: esCorrecta,
-          tiempo_respuesta_ms: tiempoTranscurrido,
-          dificultad_en_momento: preguntaActual.dificultad,
-        },
-      ])
-
-      if (!esCorrecta) {
-        setVidas((v) => v - 1)
+        })
+        setVidas(verificada.vidas)
+        setPuntaje(verificada.puntaje)
+        setRespuestaCorrectaRevelada(verificada.respuesta_correcta)
+        setRespuestaSeleccionada(indiceRespuesta)
+        setResultadoPendiente(verificada.terminada ? verificada.resultado : null)
+        setMostrandoResultadoPregunta(true)
+      } catch {
+        // No se descuenta ninguna vida: la pregunta sigue en juego en el servidor.
+        setErrorJuego('No se pudo verificar tu respuesta. Toca una opción para reintentar.')
+      } finally {
+        setVerificando(false)
+        respondiendoRef.current = false
       }
-
-      setRespuestaCorrectaRevelada(respuestaCorrectaServidor)
-      setRespuestaSeleccionada(indiceRespuesta)
-      setMostrandoResultadoPregunta(true)
-      setVerificando(false)
-      respondiendoRef.current = false
     },
-    [preguntas, indiceActual, inicioPregunta, mostrandoResultadoPregunta]
+    [pregunta, partidaId, mostrandoResultadoPregunta]
   )
 
   useEffect(() => {
-    if (estado !== 'jugando' || mostrandoResultadoPregunta) return
+    if (estado !== 'jugando' || !pregunta || mostrandoResultadoPregunta) return
 
     const intervalo = setInterval(() => {
       const restante = DURACION_PREGUNTA_MS - (Date.now() - inicioPregunta)
-      if (restante <= 0) {
-        setTiempoRestante(0)
-        registrarRespuesta(null)
-      } else {
+      if (restante > 0) {
         setTiempoRestante(restante)
+        return
+      }
+      setTiempoRestante(0)
+      // Se avisa al servidor una sola vez; si falla, el jugador reintenta tocando una opción.
+      if (!tiempoAgotadoEnviadoRef.current) {
+        tiempoAgotadoEnviadoRef.current = true
+        registrarRespuesta(null)
       }
     }, 100)
 
     return () => clearInterval(intervalo)
-  }, [estado, inicioPregunta, mostrandoResultadoPregunta, registrarRespuesta])
+  }, [estado, pregunta, inicioPregunta, mostrandoResultadoPregunta, registrarRespuesta])
 
-  function siguientePregunta() {
-    if (vidas <= 0) {
-      setMotivoFin('vidas')
-      setEstado('resultado')
-      guardarPartida(respuestas, categoriaSeleccionada)
+  async function siguientePregunta() {
+    if (resultadoPendiente) {
+      finalizar(resultadoPendiente, 'vidas')
       return
     }
-    if (indiceActual + 1 >= preguntas.length) {
-      setMotivoFin('preguntas')
-      setEstado('resultado')
-      guardarPartida(respuestas, categoriaSeleccionada)
-      return
+    if (!partidaId || cargando) return
+
+    setCargando(true)
+    setErrorJuego('')
+    try {
+      aplicarPaso(await postJson<PasoPartida>('/api/partida/siguiente', { partida_id: partidaId }))
+    } catch {
+      setErrorJuego('No se pudo cargar la siguiente pregunta. Intenta de nuevo.')
+    } finally {
+      setCargando(false)
     }
-    setIndiceActual((i) => i + 1)
-    setInicioPregunta(Date.now())
-    setTiempoRestante(DURACION_PREGUNTA_MS)
-    setRespuestaSeleccionada(null)
-    setRespuestaCorrectaRevelada(null)
-    setMostrandoResultadoPregunta(false)
   }
 
   if (estado === 'seleccion') {
@@ -334,6 +291,10 @@ export default function JugarPage() {
                   Cerrar sesión
                 </button>
               </div>
+            ) : sinPerfil ? (
+              <Link href="/completar-perfil" className="text-accent hover:underline">
+                Completa tu perfil para guardar tu ranking →
+              </Link>
             ) : (
               <Link href="/login" className="text-accent hover:underline">
                 Iniciar sesión para guardar tu ranking →
@@ -345,10 +306,12 @@ export default function JugarPage() {
           Tienes {VIDAS_INICIALES} vidas — la partida sigue hasta que te equivoques{' '}
           {VIDAS_INICIALES} veces o se acaben las preguntas.
         </p>
+        {errorJuego && <p className="text-sm text-bad mb-4">{errorJuego}</p>}
         <div className="grid grid-cols-2 gap-3">
           <button
             onClick={() => iniciarPartida(null)}
-            className="col-span-2 p-4 rounded-xl bg-brand text-paper font-bold hover:brightness-110 transition shadow-[0_0_25px_-10px_rgba(255,61,113,0.6)]"
+            disabled={cargando}
+            className="col-span-2 p-4 rounded-xl bg-brand text-paper font-bold hover:brightness-110 transition shadow-[0_0_25px_-10px_rgba(255,61,113,0.6)] disabled:opacity-50"
           >
             🎲 Mezclado (todas las categorías)
           </button>
@@ -356,7 +319,8 @@ export default function JugarPage() {
             <button
               key={c.id}
               onClick={() => iniciarPartida(c.id)}
-              className="p-4 rounded-xl bg-surface border border-white/5 text-paper font-medium hover:border-accent/50 transition text-left"
+              disabled={cargando}
+              className="p-4 rounded-xl bg-surface border border-white/5 text-paper font-medium hover:border-accent/50 transition text-left disabled:opacity-50"
             >
               {c.nombre}
             </button>
@@ -367,8 +331,6 @@ export default function JugarPage() {
   }
 
   if (estado === 'jugando') {
-    const pregunta = preguntas[indiceActual]
-
     if (!pregunta) {
       return (
         <div className="max-w-2xl mx-auto p-6 text-center">
@@ -390,7 +352,7 @@ export default function JugarPage() {
         <div className="flex justify-between items-center mb-6">
           <div>
             <p className="font-mono text-xs text-ink-soft uppercase tracking-wide mb-1">
-              Pregunta {indiceActual + 1} · Dif. {String(pregunta.dificultad).padStart(2, '0')}
+              Pregunta {numeroPregunta} · Dif. {String(pregunta.dificultad).padStart(2, '0')} · {puntaje} pts
             </p>
             <div className="flex gap-1">
               {Array.from({ length: VIDAS_INICIALES }).map((_, i) => (
@@ -430,14 +392,15 @@ export default function JugarPage() {
           <p className="text-center text-sm text-ink-soft mt-4 font-mono">verificando...</p>
         )}
 
+        {errorJuego && <p className="text-center text-sm text-bad mt-4">{errorJuego}</p>}
+
         {mostrandoResultadoPregunta && (
           <button
             onClick={siguientePregunta}
-            className="mt-6 w-full p-3 rounded-xl bg-brand text-paper font-bold hover:brightness-110 transition"
+            disabled={cargando}
+            className="mt-6 w-full p-3 rounded-xl bg-brand text-paper font-bold hover:brightness-110 transition disabled:opacity-50"
           >
-            {vidas <= 0 || indiceActual + 1 >= preguntas.length
-              ? 'Ver resultados'
-              : 'Siguiente pregunta'}
+            {resultadoPendiente ? 'Ver resultados' : 'Siguiente pregunta'}
           </button>
         )}
       </div>
@@ -456,12 +419,10 @@ export default function JugarPage() {
       </p>
 
       <div className="bg-surface border border-white/5 rounded-2xl p-8 mb-6">
-        {estadoGuardado === 'guardando' || !resultadoFinal ? (
-          <p className="text-ink-soft font-mono">calculando resultado...</p>
-        ) : (
+        {resultadoFinal && (
           <>
             <p className="text-ink-soft mb-2">
-              {resultadoFinal.correctas} correctas de {respuestas.length} respondidas
+              {resultadoFinal.correctas} correctas de {resultadoFinal.total_respondidas} respondidas
             </p>
             <p className="font-mono text-5xl font-bold text-brand [text-shadow:0_0_30px_rgba(255,61,113,0.4)]">
               {resultadoFinal.puntaje}
@@ -471,11 +432,11 @@ export default function JugarPage() {
         )}
 
         <p className="text-sm text-ink-soft mt-4 min-h-[20px]">
-          {estadoGuardado === 'guardado' &&
-            (usuario
-              ? 'Guardado en tu cuenta ✓'
-              : 'Partida guardada como invitado (no suma al ranking)')}
-          {estadoGuardado === 'error' && 'No se pudo guardar la partida, pero puedes seguir jugando.'}
+          {usuario
+            ? 'Guardado en tu cuenta ✓'
+            : sinPerfil
+              ? 'Sin perfil de trivia: esta partida no suma al ranking'
+              : 'Partida de invitado (no suma al ranking)'}
         </p>
       </div>
 

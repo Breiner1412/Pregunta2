@@ -1,9 +1,10 @@
+import { z } from 'zod'
 import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
+import { verificarAdmin } from '@/lib/admin'
+import { env } from '@/lib/env'
+import { esquemaGenerarPreguntas, leerCuerpoValidado } from '@/lib/validacion'
 import { NextResponse } from 'next/server'
-
-// Generar hasta 25 preguntas puede tardar más que el límite corto por
-// defecto de las funciones serverless en Vercel, así que se sube el máximo.
-export const maxDuration = 60
 
 const NIVEL_DESCRIPCION: Record<number, string> = {
   1: 'muy fácil, la mayoría de la gente lo sabe',
@@ -13,58 +14,97 @@ const NIVEL_DESCRIPCION: Record<number, string> = {
   5: 'muy difícil, conocimiento de nicho o experto',
 }
 
-interface PreguntaGenerada {
-  pregunta: string
-  opciones: string[]
-  respuesta_correcta: number
-  dificultad: number
+// Tiempo máximo de espera a Gemini. Así una llamada colgada no deja la
+// petición (ni el lock de la categoría) abiertos indefinidamente.
+const TIMEOUT_IA_MS = 45_000
+
+const ERRORES_CUOTA: Record<string, { status: number; mensaje: string }> = {
+  cuota_ia_agotada: { status: 429, mensaje: 'Llegaste al límite diario de generaciones con IA' },
+  generacion_en_curso: { status: 409, mensaje: 'Ya hay una generación en curso para esta categoría' },
 }
 
-function esPreguntaValida(p: PreguntaGenerada): boolean {
-  return (
-    typeof p.pregunta === 'string' &&
-    p.pregunta.trim().length > 0 &&
-    Array.isArray(p.opciones) &&
-    p.opciones.length === 4 &&
-    p.opciones.every((o) => typeof o === 'string' && o.trim().length > 0) &&
-    Number.isInteger(p.respuesta_correcta) &&
-    p.respuesta_correcta >= 0 &&
-    p.respuesta_correcta <= 3 &&
-    Number.isInteger(p.dificultad) &&
-    p.dificultad >= 1 &&
-    p.dificultad <= 5
-  )
+type ClienteSupabase = Awaited<ReturnType<typeof createClient>>
+
+interface ResultadoGeneracion {
+  insertadas: number
+  respuesta: NextResponse
+}
+
+function fallo(cuerpo: Record<string, unknown>, status: number): ResultadoGeneracion {
+  return { insertadas: 0, respuesta: NextResponse.json(cuerpo, { status }) }
+}
+
+// Lo que devuelve la API de Gemini: el texto del primer candidato y por qué
+// terminó de generar (STOP es lo normal; MAX_TOKENS significa que se cortó).
+const esquemaRespuestaGemini = z.object({
+  candidates: z
+    .array(
+      z.object({
+        content: z.object({ parts: z.array(z.object({ text: z.string() })).min(1) }),
+        finishReason: z.string().optional(),
+      })
+    )
+    .min(1),
+})
+
+const MENSAJES_FIN_ANORMAL: Record<string, string> = {
+  MAX_TOKENS: 'La respuesta de la IA se cortó por largo; pide menos preguntas',
+  SAFETY: 'La IA bloqueó la respuesta por sus filtros de seguridad',
+  RECITATION: 'La IA bloqueó la respuesta por parecerse a contenido existente',
+}
+
+// El texto es un JSON con un lote de preguntas; cada una se valida por
+// separado para descartar solo las malas y no todo el lote.
+const esquemaLoteGenerado = z.object({ preguntas: z.array(z.unknown()) })
+
+const esquemaPreguntaGenerada = z.object({
+  pregunta: z.string().trim().min(1).max(300),
+  // Cuatro opciones distintas: con dos iguales la pregunta es ambigua.
+  opciones: z
+    .array(z.string().trim().min(1).max(150))
+    .length(4)
+    .refine(
+      (opciones) => new Set(opciones.map((o) => o.toLocaleLowerCase('es'))).size === opciones.length,
+      'opciones repetidas'
+    ),
+  respuesta_correcta: z.int().min(0).max(3),
+  dificultad: z.int().min(1).max(5),
+})
+
+type PreguntaGenerada = z.infer<typeof esquemaPreguntaGenerada>
+
+// Devuelve las preguntas válidas del texto JSON de la IA, o null si el
+// texto no es un lote reconocible.
+function extraerPreguntas(textoJson: string): { generadas: number; validas: PreguntaGenerada[] } | null {
+  let datos: unknown
+  try {
+    datos = JSON.parse(textoJson)
+  } catch {
+    return null
+  }
+  const lote = esquemaLoteGenerado.safeParse(datos)
+  if (!lote.success) return null
+
+  const validas = lote.data.preguntas.flatMap((p) => {
+    const resultado = esquemaPreguntaGenerada.safeParse(p)
+    return resultado.success ? [resultado.data] : []
+  })
+  return { generadas: lote.data.preguntas.length, validas }
 }
 
 export async function POST(request: Request) {
-  const supabase = await createClient()
+  const verificacion = await verificarAdmin()
+  if (!verificacion.ok) return verificacion.respuesta
+  const { supabase, usuarioId } = verificacion
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'No autenticado' }, { status: 401 })
+  const cuerpo = await leerCuerpoValidado(request, esquemaGenerarPreguntas)
+  if (!cuerpo) {
+    return NextResponse.json(
+      { error: 'Datos inválidos: categoría, cantidad (1 a 25) y dificultad (1 a 5)' },
+      { status: 400 }
+    )
   }
-
-  const { data: perfil } = await supabase
-    .from('perfiles')
-    .select('es_admin')
-    .eq('id', user.id)
-    .maybeSingle()
-
-  if (!perfil?.es_admin) {
-    return NextResponse.json({ error: 'No autorizado' }, { status: 403 })
-  }
-
-  const body = await request.json()
-  const categoriaId: string | undefined = body.categoria_id
-  const cantidad = Math.min(Math.max(Number(body.cantidad) || 10, 1), 25)
-  const dificultad: number | undefined = body.dificultad ? Number(body.dificultad) : undefined
-
-  if (!categoriaId) {
-    return NextResponse.json({ error: 'Falta categoria_id' }, { status: 400 })
-  }
+  const { categoria_id: categoriaId, cantidad, dificultad } = cuerpo
 
   const { data: categoria } = await supabase
     .from('categorias')
@@ -76,6 +116,46 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Categoría no encontrada' }, { status: 404 })
   }
 
+  // Reserva la cuota antes de llamar a la IA; se cierra pase lo que pase.
+  const admin = createAdminClient()
+  const { data: usoId, error: errorCuota } = await admin.rpc('reservar_uso_ia', {
+    p_usuario: usuarioId,
+    p_categoria: categoriaId,
+    p_cantidad: cantidad,
+    // Cuántas generaciones puede lanzar cada admin por día (cuesta cuota de Gemini).
+    p_limite_diario: env().IA_LIMITE_DIARIO,
+  })
+
+  if (errorCuota) {
+    const conocido = ERRORES_CUOTA[errorCuota.message]
+    if (conocido) {
+      return NextResponse.json({ error: conocido.mensaje }, { status: conocido.status })
+    }
+    console.error('[generar-preguntas] reservar_uso_ia', errorCuota)
+    return NextResponse.json({ error: 'Error interno' }, { status: 500 })
+  }
+
+  let insertadas = 0
+  try {
+    const resultado = await generarYGuardar(supabase, categoriaId, categoria.nombre, cantidad, dificultad)
+    insertadas = resultado.insertadas
+    return resultado.respuesta
+  } finally {
+    const { error: errorCierre } = await admin.rpc('cerrar_uso_ia', {
+      p_uso: usoId,
+      p_insertadas: insertadas,
+    })
+    if (errorCierre) console.error('[generar-preguntas] cerrar_uso_ia', errorCierre)
+  }
+}
+
+async function generarYGuardar(
+  supabase: ClienteSupabase,
+  categoriaId: string,
+  nombreCategoria: string,
+  cantidad: number,
+  dificultad: number | undefined
+): Promise<ResultadoGeneracion> {
   const { data: existentes } = await supabase
     .from('preguntas')
     .select('pregunta')
@@ -90,7 +170,7 @@ export async function POST(request: Request) {
       ? `Todas las preguntas deben ser de dificultad ${dificultad} (${NIVEL_DESCRIPCION[dificultad]}).`
       : 'Distribuye las preguntas de forma pareja entre los 5 niveles de dificultad.'
 
-  const prompt = `Genera exactamente ${cantidad} preguntas de trivia en español sobre "${categoria.nombre}" para un juego de trivias.
+  const prompt = `Genera exactamente ${cantidad} preguntas de trivia en español sobre "${nombreCategoria}" para un juego de trivias.
 
 Reglas:
 - Español neutro, preguntas claras y sin ambigüedad.
@@ -125,12 +205,12 @@ ${listaExistentes.map((p) => `  - ${p}`).join('\n') || '  (ninguna todavía)'}`
   let iaResponse: Response
   try {
     iaResponse = await fetch(
-      'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent',
+      `https://generativelanguage.googleapis.com/v1beta/models/${env().GEMINI_MODEL}:generateContent`,
       {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          'x-goog-api-key': process.env.GEMINI_API_KEY!,
+          'x-goog-api-key': env().GEMINI_API_KEY,
         },
         body: JSON.stringify({
           contents: [{ parts: [{ text: prompt }] }],
@@ -140,47 +220,62 @@ ${listaExistentes.map((p) => `  - ${p}`).join('\n') || '  (ninguna todavía)'}`
             maxOutputTokens: 8192,
           },
         }),
+        signal: AbortSignal.timeout(TIMEOUT_IA_MS),
       }
     )
-  } catch {
-    return NextResponse.json({ error: 'No se pudo contactar a la IA' }, { status: 502 })
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'TimeoutError') {
+      console.error(`[generar-preguntas] Gemini no respondió en ${TIMEOUT_IA_MS} ms`)
+      return fallo({ error: 'La IA tardó demasiado en responder, intenta de nuevo' }, 504)
+    }
+    // DNS, conexión rechazada, TLS...: sin este log la falla quedaba invisible.
+    console.error('[generar-preguntas] no se pudo contactar a Gemini', error)
+    return fallo({ error: 'No se pudo contactar a la IA' }, 502)
   }
 
+  // El detalle de los errores se registra en el servidor y no se envía al
+  // navegador (puede incluir datos del proyecto de Google o de la base).
   if (!iaResponse.ok) {
-    const detalle = await iaResponse.text()
-    return NextResponse.json({ error: 'Error de la IA', detalle }, { status: 502 })
+    console.error('[generar-preguntas] Gemini respondió', iaResponse.status, await iaResponse.text())
+    const mensaje =
+      iaResponse.status === 429
+        ? 'Se agotó la cuota de la API de Gemini, intenta más tarde'
+        : 'Error de la IA'
+    return fallo({ error: mensaje }, 502)
   }
 
-  const iaData = await iaResponse.json()
-  const textoJson = iaData.candidates?.[0]?.content?.parts?.[0]?.text
+  const iaData: unknown = await iaResponse.json().catch(() => null)
+  const respuestaIa = esquemaRespuestaGemini.safeParse(iaData)
 
-  if (!textoJson) {
-    return NextResponse.json(
-      { error: 'La IA no devolvió contenido', detalle: iaData },
-      { status: 502 }
-    )
+  if (!respuestaIa.success) {
+    console.error('[generar-preguntas] respuesta inesperada de Gemini', JSON.stringify(iaData))
+    return fallo({ error: 'La IA no devolvió contenido' }, 502)
   }
 
-  let parseado: { preguntas: PreguntaGenerada[] }
-  try {
-    parseado = JSON.parse(textoJson)
-  } catch {
-    return NextResponse.json({ error: 'La IA devolvió JSON inválido' }, { status: 502 })
+  const candidato = respuestaIa.data.candidates[0]
+  const finAnormal = candidato.finishReason && MENSAJES_FIN_ANORMAL[candidato.finishReason]
+  if (finAnormal) {
+    console.error('[generar-preguntas] Gemini terminó con', candidato.finishReason)
+    return fallo({ error: finAnormal }, 502)
   }
 
-  const generadas = parseado.preguntas ?? []
-  const validas = generadas.filter(esPreguntaValida)
+  const extraidas = extraerPreguntas(candidato.content.parts[0].text)
+  if (!extraidas) {
+    return fallo({ error: 'La IA devolvió JSON inválido' }, 502)
+  }
+
+  const { generadas, validas } = extraidas
 
   if (validas.length === 0) {
-    return NextResponse.json(
+    return fallo(
       { error: 'Ninguna pregunta generada pasó la validación' },
-      { status: 502 }
+      502
     )
   }
 
   const filas = validas.map((p) => ({
     categoria_id: categoriaId,
-    pregunta: p.pregunta.trim(),
+    pregunta: p.pregunta,
     opciones: p.opciones,
     respuesta_correcta: p.respuesta_correcta,
     dificultad: p.dificultad,
@@ -189,14 +284,25 @@ ${listaExistentes.map((p) => `  - ${p}`).join('\n') || '  (ninguna todavía)'}`
     activa: true,
   }))
 
-  const { error: errorInsert } = await supabase.from('preguntas').insert(filas)
+  // Las preguntas que ya existen en la categoría se ignoran en vez de
+  // hacer fallar todo el lote (índice único categoria_id + pregunta).
+  const { data: nuevas, error: errorInsert } = await supabase
+    .from('preguntas')
+    .upsert(filas, { onConflict: 'categoria_id,pregunta', ignoreDuplicates: true })
+    .select('id')
 
   if (errorInsert) {
-    return NextResponse.json({ error: errorInsert.message }, { status: 500 })
+    console.error('[generar-preguntas] insert', errorInsert)
+    return fallo({ error: 'No se pudieron guardar las preguntas' }, 500)
   }
 
-  return NextResponse.json({
-    insertadas: filas.length,
-    descartadas: generadas.length - validas.length,
-  })
+  const insertadas = nuevas?.length ?? 0
+
+  return {
+    insertadas,
+    respuesta: NextResponse.json({
+      insertadas,
+      descartadas: generadas - insertadas,
+    }),
+  }
 }

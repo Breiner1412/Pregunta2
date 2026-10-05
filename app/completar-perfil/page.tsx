@@ -3,12 +3,13 @@
 import { Suspense, useState, useEffect } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
+import { rutaInternaSegura } from '@/lib/redireccion'
 
 function CompletarPerfilForm() {
-  const supabase = createClient()
+  const [supabase] = useState(createClient)
   const router = useRouter()
   const searchParams = useSearchParams()
-  const next = searchParams.get('next') || '/jugar'
+  const next = rutaInternaSegura(searchParams.get('next'))
 
   const [cargando, setCargando] = useState(true)
   const [nombreUsuario, setNombreUsuario] = useState('')
@@ -41,8 +42,7 @@ function CompletarPerfilForm() {
       setCargando(false)
     }
     verificar()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [supabase, router, next])
 
   async function guardarPerfil(e: React.FormEvent) {
     e.preventDefault()
@@ -61,31 +61,39 @@ function CompletarPerfilForm() {
 
     setGuardando(true)
 
-    const {
-      data: { user },
-    } = await supabase.auth.getUser()
-    if (!user) {
-      router.replace('/login')
-      return
-    }
-
-    const { error: insertError } = await supabase.from('perfiles').insert({
-      id: user.id,
-      nombre_usuario: nombreLimpio,
-    })
-
-    setGuardando(false)
-
-    if (insertError) {
-      if (insertError.code === '23505') {
-        setError('Ese nombre de usuario ya está en uso, elige otro.')
-      } else {
-        setError('Ocurrió un error al guardar tu perfil. Intenta de nuevo.')
+    // finally: el botón se vuelve a habilitar pase lo que pase (también si
+    // la sesión venció o falla la red), en vez de quedar bloqueado.
+    try {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser()
+      if (!user) {
+        router.replace('/login')
+        return
       }
-      return
-    }
 
-    router.replace(next)
+      const { error: insertError } = await supabase.from('perfiles').insert({
+        id: user.id,
+        nombre_usuario: nombreLimpio,
+      })
+
+      if (insertError) {
+        if (insertError.code === '23505') {
+          setError('Ese nombre de usuario ya está en uso, elige otro.')
+        } else if (insertError.code === '23514') {
+          setError('Ese nombre no es válido: 3 a 20 letras, números o guion bajo.')
+        } else {
+          setError('Ocurrió un error al guardar tu perfil. Intenta de nuevo.')
+        }
+        return
+      }
+
+      router.replace(next)
+    } catch {
+      setError('Error de red al guardar tu perfil. Intenta de nuevo.')
+    } finally {
+      setGuardando(false)
+    }
   }
 
   if (cargando) {

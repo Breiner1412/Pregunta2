@@ -1,0 +1,35 @@
+# Se instalan y se compilan dentro de la imagen.
+node_modules
+.next
+out
+build
+coverage
+*.tsbuildinfo
+next-env.d.ts
+
+# Nunca meter credenciales en la imagen: las variables llegan por
+# build args (NEXT_PUBLIC_*) y por env_file en runtime.
+.env
+.env.*
+!.env.example
+
+# Control de versiones, editores y herramientas.
+.git
+.gitignore
+.vscode
+.idea
+.claude
+.agents
+AGENTS.md
+CLAUDE.md
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.DS_Store
+
+# Archivos de Docker y del proyecto que la app no necesita.
+Dockerfile
+.dockerignore
+docker-compose.yml
+supabase
+scripts

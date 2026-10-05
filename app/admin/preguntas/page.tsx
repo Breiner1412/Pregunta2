@@ -1,17 +1,39 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import type { Categoria, Pregunta } from '@/types/game'
+import type { Database } from '@/types/database'
+import { esquemaOpciones } from '@/lib/validacion'
 
+type FilaPendiente = Pick<
+  Database['trivia']['Tables']['preguntas']['Row'],
+  'id' | 'categoria_id' | 'pregunta' | 'opciones' | 'respuesta_correcta' | 'dificultad'
+>
+
+// opciones llega como jsonb: solo se muestran las filas con 4 textos.
+function aPreguntas(filas: FilaPendiente[] | null): Pregunta[] {
+  return (filas ?? []).flatMap((fila) => {
+    const opciones = esquemaOpciones.safeParse(fila.opciones)
+    return opciones.success ? [{ ...fila, opciones: opciones.data }] : []
+  })
+}
+
+async function consultarPendientes(supabase: ReturnType<typeof createClient>): Promise<Pregunta[]> {
+  const { data } = await supabase
+    .from('preguntas')
+    .select('id, categoria_id, pregunta, opciones, respuesta_correcta, dificultad')
+    .eq('revisada', false)
+    .order('created_at', { ascending: false })
+  return aPreguntas(data)
+}
+
+// El acceso se verifica en el servidor (app/admin/layout.tsx): si esta
+// página se renderiza, la sesión es de un admin.
 export default function AdminPreguntasPage() {
-  const supabase = createClient()
-  const router = useRouter()
-
-  const [verificando, setVerificando] = useState(true)
-  const [esAdmin, setEsAdmin] = useState(false)
+  // useState mantiene el mismo cliente entre renders (identidad estable para los efectos).
+  const [supabase] = useState(createClient)
 
   const [categorias, setCategorias] = useState<Categoria[]>([])
   const [categoriaId, setCategoriaId] = useState('')
@@ -22,36 +44,8 @@ export default function AdminPreguntasPage() {
   const [mensaje, setMensaje] = useState('')
 
   const [pendientes, setPendientes] = useState<Pregunta[]>([])
+  const [errorRevision, setErrorRevision] = useState('')
   const [cargandoPendientes, setCargandoPendientes] = useState(true)
-
-  useEffect(() => {
-    async function verificar() {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser()
-
-      if (!user) {
-        router.replace('/login')
-        return
-      }
-
-      const { data: perfil } = await supabase
-        .from('perfiles')
-        .select('es_admin')
-        .eq('id', user.id)
-        .maybeSingle()
-
-      if (!perfil?.es_admin) {
-        router.replace('/jugar')
-        return
-      }
-
-      setEsAdmin(true)
-      setVerificando(false)
-    }
-    verificar()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
 
   useEffect(() => {
     async function cargarCategorias() {
@@ -66,34 +60,25 @@ export default function AdminPreguntasPage() {
       }
     }
     cargarCategorias()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [supabase])
 
+  // Recarga la lista después de generar preguntas nuevas.
   const cargarPendientes = useCallback(async () => {
-    const { data } = await supabase
-      .from('preguntas')
-      .select('id, categoria_id, pregunta, opciones, respuesta_correcta, dificultad')
-      .eq('revisada', false)
-      .order('created_at', { ascending: false })
-    setPendientes(data ?? [])
+    setPendientes(await consultarPendientes(supabase))
     setCargandoPendientes(false)
   }, [supabase])
 
   useEffect(() => {
-    if (!esAdmin) return
-
-    async function cargarInicial() {
-      const { data } = await supabase
-        .from('preguntas')
-        .select('id, categoria_id, pregunta, opciones, respuesta_correcta, dificultad')
-        .eq('revisada', false)
-        .order('created_at', { ascending: false })
-      setPendientes(data ?? [])
+    let cancelado = false
+    consultarPendientes(supabase).then((lista) => {
+      if (cancelado) return
+      setPendientes(lista)
       setCargandoPendientes(false)
+    })
+    return () => {
+      cancelado = true
     }
-    cargarInicial()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [esAdmin])
+  }, [supabase])
 
   async function generar() {
     if (!categoriaId) return
@@ -113,12 +98,7 @@ export default function AdminPreguntasPage() {
       const data = await res.json()
 
       if (!res.ok) {
-        const detalle = data.detalle
-          ? typeof data.detalle === 'string'
-            ? data.detalle
-            : JSON.stringify(data.detalle)
-          : ''
-        setMensaje(`Error: ${data.error ?? 'desconocido'}${detalle ? ` — ${detalle}` : ''}`)
+        setMensaje(`Error: ${data.error ?? 'desconocido'}`)
       } else {
         setMensaje(`Se generaron ${data.insertadas} preguntas nuevas para revisar.`)
         cargarPendientes()
@@ -130,23 +110,31 @@ export default function AdminPreguntasPage() {
     }
   }
 
-  async function aprobar(id: string) {
-    await supabase.from('preguntas').update({ revisada: true }).eq('id', id)
-    setPendientes((prev) => prev.filter((p) => p.id !== id))
+  // Aprobar y rechazar pasan por el servidor, que vuelve a verificar el rol.
+  // La pregunta solo se quita de la lista si el servidor confirmó el cambio.
+  async function revisar(id: string, metodo: 'PATCH' | 'DELETE') {
+    const accion = metodo === 'PATCH' ? 'aprobar' : 'rechazar'
+    setErrorRevision('')
+    try {
+      const res = await fetch(`/api/admin/preguntas/${id}`, { method: metodo })
+      if (!res.ok) {
+        const data = await res.json().catch(() => null)
+        setErrorRevision(`No se pudo ${accion} la pregunta: ${data?.error ?? `error ${res.status}`}`)
+        return
+      }
+      setPendientes((prev) => prev.filter((p) => p.id !== id))
+    } catch {
+      setErrorRevision(`Error de red al ${accion} la pregunta.`)
+    }
   }
 
-  async function rechazar(id: string) {
-    await supabase.from('preguntas').delete().eq('id', id)
-    setPendientes((prev) => prev.filter((p) => p.id !== id))
-  }
+  const aprobar = (id: string) => revisar(id, 'PATCH')
+  const rechazar = (id: string) => revisar(id, 'DELETE')
 
-  function nombreCategoria(id: string) {
+  function nombreCategoria(id: string | null) {
     return categorias.find((c) => c.id === id)?.nombre ?? '???'
   }
 
-  if (verificando || !esAdmin) {
-    return <div className="p-6 text-center mt-10 sm:mt-20 text-ink-soft">Verificando acceso...</div>
-  }
 
   return (
     <div className="max-w-2xl mx-auto p-6">
@@ -216,6 +204,8 @@ export default function AdminPreguntasPage() {
       <h2 className="text-xl font-bold mb-4">
         Pendientes de revisión {pendientes.length > 0 && `(${pendientes.length})`}
       </h2>
+
+      {errorRevision && <p className="text-sm text-bad mb-4">{errorRevision}</p>}
 
       {cargandoPendientes ? (
         <p className="text-ink-soft">Cargando...</p>
