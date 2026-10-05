@@ -6,7 +6,6 @@ import { env } from '@/lib/env'
 import { esquemaGenerarPreguntas, leerCuerpoValidado } from '@/lib/validacion'
 import { NextResponse } from 'next/server'
 
-
 const NIVEL_DESCRIPCION: Record<number, string> = {
   1: 'muy fácil, la mayoría de la gente lo sabe',
   2: 'fácil, conocimiento común',
@@ -18,7 +17,6 @@ const NIVEL_DESCRIPCION: Record<number, string> = {
 // Tiempo máximo de espera a Gemini. Así una llamada colgada no deja la
 // petición (ni el lock de la categoría) abiertos indefinidamente.
 const TIMEOUT_IA_MS = 45_000
-
 
 const ERRORES_CUOTA: Record<string, { status: number; mensaje: string }> = {
   cuota_ia_agotada: { status: 429, mensaje: 'Llegaste al límite diario de generaciones con IA' },
@@ -227,8 +225,11 @@ ${listaExistentes.map((p) => `  - ${p}`).join('\n') || '  (ninguna todavía)'}`
     )
   } catch (error) {
     if (error instanceof DOMException && error.name === 'TimeoutError') {
+      console.error(`[generar-preguntas] Gemini no respondió en ${TIMEOUT_IA_MS} ms`)
       return fallo({ error: 'La IA tardó demasiado en responder, intenta de nuevo' }, 504)
     }
+    // DNS, conexión rechazada, TLS...: sin este log la falla quedaba invisible.
+    console.error('[generar-preguntas] no se pudo contactar a Gemini', error)
     return fallo({ error: 'No se pudo contactar a la IA' }, 502)
   }
 
