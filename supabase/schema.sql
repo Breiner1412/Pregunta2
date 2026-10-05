@@ -426,12 +426,19 @@ $$;
 -- ============================================
 -- Row Level Security
 -- ============================================
+-- El auth es compartido: un usuario de la otra app llega aquí como
+-- "authenticated". Por eso ninguna política confía solo en tener sesión:
+-- cada escritura se limita a la propia fila y a columnas concretas, los
+-- puntajes los escribe solo el servidor y el rol admin sale de
+-- trivia.admins. Lo más que puede hacer ese usuario es crearse un perfil
+-- y jugar.
 
 alter table trivia.categorias enable row level security;
 
 drop policy if exists "Categorías son públicas para lectura" on trivia.categorias;
 create policy "Categorías son públicas para lectura"
 on trivia.categorias for select
+to anon, authenticated
 using (true);
 
 alter table trivia.admins enable row level security;
@@ -439,6 +446,7 @@ alter table trivia.admins enable row level security;
 drop policy if exists "Cada usuario ve solo su propia fila de admin" on trivia.admins;
 create policy "Cada usuario ve solo su propia fila de admin"
 on trivia.admins for select
+to authenticated
 using ((select auth.uid()) = usuario_id);
 
 alter table trivia.perfiles enable row level security;
@@ -446,16 +454,19 @@ alter table trivia.perfiles enable row level security;
 drop policy if exists "Perfiles son públicos para lectura" on trivia.perfiles;
 create policy "Perfiles son públicos para lectura"
 on trivia.perfiles for select
+to anon, authenticated
 using (true);
 
 drop policy if exists "Usuarios pueden crear su propio perfil" on trivia.perfiles;
 create policy "Usuarios pueden crear su propio perfil"
 on trivia.perfiles for insert
+to authenticated
 with check ((select auth.uid()) = id);
 
 drop policy if exists "Usuarios pueden actualizar su propio perfil" on trivia.perfiles;
 create policy "Usuarios pueden actualizar su propio perfil"
 on trivia.perfiles for update
+to authenticated
 using ((select auth.uid()) = id)
 with check ((select auth.uid()) = id);
 
@@ -464,6 +475,7 @@ alter table trivia.partidas enable row level security;
 drop policy if exists "Cada usuario ve solo sus partidas" on trivia.partidas;
 create policy "Cada usuario ve solo sus partidas"
 on trivia.partidas for select
+to authenticated
 using ((select auth.uid()) = usuario_id);
 
 alter table trivia.respuestas_partida enable row level security;
@@ -471,6 +483,7 @@ alter table trivia.respuestas_partida enable row level security;
 drop policy if exists "Cada usuario ve solo las respuestas de sus partidas" on trivia.respuestas_partida;
 create policy "Cada usuario ve solo las respuestas de sus partidas"
 on trivia.respuestas_partida for select
+to authenticated
 using (
   exists (
     select 1 from trivia.partidas p
@@ -483,6 +496,7 @@ alter table trivia.mejores_puntajes enable row level security;
 drop policy if exists "Mejores puntajes son públicos para lectura" on trivia.mejores_puntajes;
 create policy "Mejores puntajes son públicos para lectura"
 on trivia.mejores_puntajes for select
+to anon, authenticated
 using (true);
 
 -- Sin políticas de insert/update: el mejor puntaje solo lo escribe el
@@ -499,68 +513,65 @@ drop policy if exists "Preguntas son públicas para lectura" on trivia.preguntas
 drop policy if exists "Solo administradores pueden leer preguntas" on trivia.preguntas;
 create policy "Solo administradores pueden leer preguntas"
 on trivia.preguntas for select
+to authenticated
 using ((select trivia.es_admin()));
 
 drop policy if exists "Solo administradores pueden insertar preguntas" on trivia.preguntas;
 create policy "Solo administradores pueden insertar preguntas"
 on trivia.preguntas for insert
-with check (
-  (select trivia.es_admin())
-);
+to authenticated
+with check ((select trivia.es_admin()));
 
 drop policy if exists "Solo administradores pueden actualizar preguntas" on trivia.preguntas;
 create policy "Solo administradores pueden actualizar preguntas"
 on trivia.preguntas for update
-using (
-  (select trivia.es_admin())
-);
+to authenticated
+using ((select trivia.es_admin()))
+with check ((select trivia.es_admin()));
 
 drop policy if exists "Solo administradores pueden eliminar preguntas" on trivia.preguntas;
 create policy "Solo administradores pueden eliminar preguntas"
 on trivia.preguntas for delete
-using (
-  (select trivia.es_admin())
-);
+to authenticated
+using ((select trivia.es_admin()));
 
 
 -- ============================================
 -- Permisos
 -- ============================================
--- Un esquema nuevo no hereda los permisos por defecto que Supabase da
--- en public, así que se otorgan de forma explícita.
+-- Un esquema nuevo no hereda los permisos por defecto que Supabase da en
+-- public. En cada corrida se parte de cero y se otorga solo lo necesario.
 
 grant usage on schema trivia to anon, authenticated, service_role;
 
-grant all on all tables in schema trivia to anon, authenticated, service_role;
-grant execute on all functions in schema trivia to anon, authenticated, service_role;
+revoke all on all tables in schema trivia from anon, authenticated;
+revoke execute on all functions in schema trivia from public, anon, authenticated;
+alter default privileges in schema trivia revoke execute on functions from public;
 
--- La lista de admins nunca se escribe desde el navegador.
-revoke insert, update, delete, truncate on trivia.admins from anon, authenticated;
+-- El servidor (service_role) puede todo; nunca se usa desde el navegador.
+grant all on all tables in schema trivia to service_role;
+grant execute on all functions in schema trivia to service_role;
+
+-- Lectura pública: categorías, perfiles y ranking.
+grant select on trivia.categorias, trivia.perfiles, trivia.mejores_puntajes to anon, authenticated;
 
 -- Del perfil, el usuario solo puede escribir sus datos públicos. Los
 -- contadores (puntaje_total, partidas_jugadas) los mueve el servidor.
-revoke insert, update, delete, truncate on trivia.perfiles from anon, authenticated;
 grant insert (id, nombre_usuario, avatar_url) on trivia.perfiles to authenticated;
 grant update (nombre_usuario, avatar_url) on trivia.perfiles to authenticated;
 
--- Las categorías solo se leen desde el navegador.
-revoke insert, update, delete, truncate on trivia.categorias from anon, authenticated;
+-- Lectura de lo propio (las políticas filtran por usuario). La lista de
+-- admins nunca se escribe desde el navegador.
+grant select on trivia.admins, trivia.partidas, trivia.respuestas_partida to authenticated;
 
--- Las partidas y sus respuestas solo las escribe el servidor (service_role).
-revoke insert, update, delete, truncate on trivia.partidas, trivia.respuestas_partida
-  from anon, authenticated;
+-- Preguntas: se abre la tabla a authenticated, pero las políticas solo
+-- dejan pasar a los admins (panel de revisión).
+grant select, insert, update, delete on trivia.preguntas to authenticated;
 
--- El ranking solo lo escribe el servidor (service_role).
-revoke insert, update, delete, truncate on trivia.mejores_puntajes from anon, authenticated;
+grant execute on function trivia.es_admin() to authenticated;
+grant execute on function trivia.obtener_posicion_categoria(uuid, uuid) to anon, authenticated;
 
--- El flujo de partida solo lo ejecuta el servidor.
-revoke execute on function
-  trivia._bloquear_partida(uuid, uuid),
-  trivia._finalizar_partida(uuid),
-  trivia.iniciar_partida(uuid, uuid),
-  trivia.servir_siguiente_pregunta(uuid, uuid),
-  trivia.responder_pregunta(uuid, uuid, uuid, int)
-  from public, anon, authenticated;
+-- Todo lo demás (flujo de partida, puntajes) lo ejecuta solo service_role.
 
 
 -- ============================================
