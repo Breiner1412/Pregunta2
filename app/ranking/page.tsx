@@ -50,6 +50,10 @@ export default function RankingPage() {
     }, [])
 
     useEffect(() => {
+        // Si el usuario cambia de categoría antes de que termine esta carga,
+        // su resultado se descarta para no pisar el de la categoría nueva.
+        let cancelado = false
+
         async function cargarRanking() {
             setCargandoRanking(true)
             setPropio(null)
@@ -75,6 +79,7 @@ export default function RankingPage() {
                 nombre_usuario: nombreDesdeFila(f),
             }))
 
+            if (cancelado) return
             setRanking(entradas)
 
             if (usuarioId) {
@@ -92,6 +97,7 @@ export default function RankingPage() {
                         : queryPropio.is('categoria_id', null)
 
                     const { data: propioData } = await queryPropio.maybeSingle()
+                    if (cancelado) return
 
                     if (propioData) {
                         const f = propioData as unknown as FilaEmbebida
@@ -106,6 +112,7 @@ export default function RankingPage() {
                             p_usuario: usuarioId,
                             p_categoria: categoriaActiva ?? undefined,
                         })
+                        if (cancelado) return
                         if (typeof posicion === 'number') setPosicionPropia(posicion)
                     }
                 }
@@ -114,6 +121,10 @@ export default function RankingPage() {
             setCargandoRanking(false)
         }
         cargarRanking()
+
+        return () => {
+            cancelado = true
+        }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [categoriaActiva, usuarioId])
 
