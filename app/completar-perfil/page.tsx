@@ -3,12 +3,13 @@
 import { Suspense, useState, useEffect } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
+import { rutaInternaSegura } from '@/lib/redireccion'
 
 function CompletarPerfilForm() {
   const supabase = createClient()
   const router = useRouter()
   const searchParams = useSearchParams()
-  const next = searchParams.get('next') || '/jugar'
+  const next = rutaInternaSegura(searchParams.get('next'))
 
   const [cargando, setCargando] = useState(true)
   const [nombreUsuario, setNombreUsuario] = useState('')
