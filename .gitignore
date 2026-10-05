@@ -42,3 +42,6 @@ skills-lock.json
 api.txt
 keys.txt
 secrets.txt
+
+# archivos temporales de la CLI de Supabase (supabase gen types, etc.)
+supabase/.temp/
