@@ -215,6 +215,25 @@ on trivia.perfiles for update
 using ((select auth.uid()) = id)
 with check ((select auth.uid()) = id);
 
+alter table trivia.partidas enable row level security;
+
+drop policy if exists "Cada usuario ve solo sus partidas" on trivia.partidas;
+create policy "Cada usuario ve solo sus partidas"
+on trivia.partidas for select
+using ((select auth.uid()) = usuario_id);
+
+alter table trivia.respuestas_partida enable row level security;
+
+drop policy if exists "Cada usuario ve solo las respuestas de sus partidas" on trivia.respuestas_partida;
+create policy "Cada usuario ve solo las respuestas de sus partidas"
+on trivia.respuestas_partida for select
+using (
+  exists (
+    select 1 from trivia.partidas p
+    where p.id = partida_id and p.usuario_id = (select auth.uid())
+  )
+);
+
 alter table trivia.mejores_puntajes enable row level security;
 
 drop policy if exists "Mejores puntajes son públicos para lectura" on trivia.mejores_puntajes;
@@ -283,6 +302,10 @@ grant update (nombre_usuario, avatar_url) on trivia.perfiles to authenticated;
 
 -- Las categorías solo se leen desde el navegador.
 revoke insert, update, delete, truncate on trivia.categorias from anon, authenticated;
+
+-- Las partidas y sus respuestas solo las escribe el servidor (service_role).
+revoke insert, update, delete, truncate on trivia.partidas, trivia.respuestas_partida
+  from anon, authenticated;
 
 
 -- ============================================
