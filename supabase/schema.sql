@@ -515,7 +515,8 @@ as $$
   where id = p_uso and estado = 'en_curso';
 $$;
 
--- Posición exacta de un usuario dentro de una categoría (o Mezclado)
+-- Posición exacta de un usuario dentro de una categoría (o Mezclado).
+-- Devuelve null si el usuario todavía no tiene puntaje en esa categoría.
 create or replace function trivia.obtener_posicion_categoria(p_usuario uuid, p_categoria uuid)
 returns int
 language sql
@@ -525,14 +526,19 @@ set search_path = ''
 as $$
   -- Compara contra categoria_clave (columna indexada) y no contra una
   -- expresión, para que Postgres pueda usar los índices.
-  select (count(*) + 1)::int
-  from trivia.mejores_puntajes
-  where categoria_clave = coalesce(p_categoria, '00000000-0000-0000-0000-000000000000'::uuid)
-    and mejor_puntaje > (
-      select mejor_puntaje from trivia.mejores_puntajes
-      where usuario_id = p_usuario
-        and categoria_clave = coalesce(p_categoria, '00000000-0000-0000-0000-000000000000'::uuid)
-    );
+  with propio as (
+    select mejor_puntaje
+    from trivia.mejores_puntajes
+    where usuario_id = p_usuario
+      and categoria_clave = coalesce(p_categoria, '00000000-0000-0000-0000-000000000000'::uuid)
+  )
+  select (
+    select count(*) + 1
+    from trivia.mejores_puntajes m
+    where m.categoria_clave = coalesce(p_categoria, '00000000-0000-0000-0000-000000000000'::uuid)
+      and m.mejor_puntaje > propio.mejor_puntaje
+  )::int
+  from propio;
 $$;
 
 
