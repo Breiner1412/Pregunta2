@@ -362,6 +362,7 @@ export type Database = {
         }
       }
       _finalizar_partida: { Args: { p_partida: string }; Returns: Json }
+      _limpiar_partidas_viejas: { Args: Record<PropertyKey, never>; Returns: undefined }
       cerrar_uso_ia: { Args: { p_insertadas: number; p_uso: string }; Returns: undefined }
       es_admin: { Args: Record<PropertyKey, never>; Returns: boolean }
       iniciar_partida: { Args: { p_categoria?: string; p_usuario?: string }; Returns: string }

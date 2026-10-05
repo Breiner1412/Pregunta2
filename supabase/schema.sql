@@ -139,6 +139,9 @@ create index if not exists idx_preguntas_categoria_dificultad
   on trivia.preguntas (categoria_id, dificultad) where activa = true;
 create index if not exists idx_perfiles_puntaje on trivia.perfiles (puntaje_total desc);
 create index if not exists idx_partidas_usuario on trivia.partidas (usuario_id);
+-- Para la limpieza de partidas abandonadas y de invitado (_limpiar_partidas_viejas).
+create index if not exists idx_partidas_abandonadas on trivia.partidas (created_at) where not finalizada;
+create index if not exists idx_partidas_invitado on trivia.partidas (created_at) where usuario_id is null;
 
 -- Índices de claves foráneas (borrados en cascada / set null y joins).
 create index if not exists idx_partidas_categoria on trivia.partidas (categoria_id);
@@ -274,6 +277,28 @@ begin
 end;
 $$;
 
+-- Borra, en lotes acotados, lo que no aporta al ranking y solo ocupa disco:
+-- partidas que nadie terminó en un día, y partidas de invitado (que nunca
+-- suman al ranking) de más de 30 días. Sus respuestas se borran en cascada.
+-- Se llama al iniciar cada partida, así no hace falta un cron.
+create or replace function trivia._limpiar_partidas_viejas()
+returns void
+language sql
+security definer
+set search_path = ''
+as $$
+  delete from trivia.partidas
+  where id in (
+    (select id from trivia.partidas
+     where not finalizada and created_at < now() - interval '1 day'
+     limit 200)
+    union all
+    (select id from trivia.partidas
+     where usuario_id is null and created_at < now() - interval '30 days'
+     limit 200)
+  );
+$$;
+
 -- Crea una partida. Un usuario de auth sin perfil de trivia (por ejemplo,
 -- alguien que solo usa la otra app) juega como invitado.
 -- Parámetros con default null: invitado (sin usuario) y modo Mezclado (sin categoría).
@@ -291,6 +316,8 @@ begin
      and not exists (select 1 from trivia.categorias where id = p_categoria and activa) then
     raise exception 'categoria_no_encontrada' using errcode = 'P0002';
   end if;
+
+  perform trivia._limpiar_partidas_viejas();
 
   select id into v_usuario from trivia.perfiles where id = p_usuario;
 
