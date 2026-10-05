@@ -249,17 +249,24 @@ ${listaExistentes.map((p) => `  - ${p}`).join('\n') || '  (ninguna todavía)'}`
     activa: true,
   }))
 
-  const { error: errorInsert } = await supabase.from('preguntas').insert(filas)
+  // Las preguntas que ya existen en la categoría se ignoran en vez de
+  // hacer fallar todo el lote (índice único categoria_id + pregunta).
+  const { data: nuevas, error: errorInsert } = await supabase
+    .from('preguntas')
+    .upsert(filas, { onConflict: 'categoria_id,pregunta', ignoreDuplicates: true })
+    .select('id')
 
   if (errorInsert) {
     return fallo({ error: errorInsert.message }, 500)
   }
 
+  const insertadas = nuevas?.length ?? 0
+
   return {
-    insertadas: filas.length,
+    insertadas,
     respuesta: NextResponse.json({
-      insertadas: filas.length,
-      descartadas: generadas.length - validas.length,
+      insertadas,
+      descartadas: generadas.length - insertadas,
     }),
   }
 }

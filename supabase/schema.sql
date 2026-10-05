@@ -37,24 +37,28 @@ create table if not exists trivia.categorias (
 create table if not exists trivia.preguntas (
   id uuid primary key default gen_random_uuid(),
   categoria_id uuid references trivia.categorias(id) on delete cascade,
-  pregunta text not null,
-  opciones jsonb not null,
-  respuesta_correcta integer not null,
+  pregunta text not null check (char_length(btrim(pregunta)) > 0),
+  -- Siempre 4 opciones; la correcta es su índice (0 a 3).
+  opciones jsonb not null check (
+    case when jsonb_typeof(opciones) = 'array' then jsonb_array_length(opciones) = 4 else false end
+  ),
+  respuesta_correcta integer not null check (respuesta_correcta between 0 and 3),
   dificultad integer not null default 1 check (dificultad between 1 and 5),
-  generada_por_ia boolean default false,
-  revisada boolean default true,
-  veces_usada integer default 0,
-  activa boolean default true,
-  created_at timestamptz default now()
+  generada_por_ia boolean not null default false,
+  revisada boolean not null default true,
+  veces_usada integer not null default 0 check (veces_usada >= 0),
+  activa boolean not null default true,
+  created_at timestamptz not null default now()
 );
 
 create table if not exists trivia.perfiles (
   id uuid primary key references auth.users(id) on delete cascade,
-  nombre_usuario text unique not null,
+  -- Mismo formato que valida completar-perfil: 3 a 20 letras, números o _.
+  nombre_usuario text unique not null check (nombre_usuario ~ '^[A-Za-z0-9_]{3,20}$'),
   avatar_url text,
-  puntaje_total integer default 0,
-  partidas_jugadas integer default 0,
-  created_at timestamptz default now()
+  puntaje_total bigint not null default 0 check (puntaje_total >= 0),
+  partidas_jugadas integer not null default 0 check (partidas_jugadas >= 0),
+  created_at timestamptz not null default now()
 );
 
 -- El rol de admin NO sale de auth (que es compartido con la otra app),
@@ -68,29 +72,31 @@ create table if not exists trivia.admins (
 create table if not exists trivia.partidas (
   id uuid primary key default gen_random_uuid(),
   usuario_id uuid references trivia.perfiles(id) on delete set null,
-  modo text not null default 'mixto',
+  modo text not null default 'mixto' check (modo in ('mixto', 'categoria_unica')),
   categoria_id uuid references trivia.categorias(id) on delete set null,
-  puntaje integer not null default 0,
-  preguntas_correctas integer default 0,
-  preguntas_totales integer default 0,
-  finalizada boolean default false,
+  puntaje integer not null default 0 check (puntaje >= 0),
+  preguntas_correctas integer not null default 0 check (preguntas_correctas >= 0),
+  preguntas_totales integer not null default 0 check (preguntas_totales >= 0),
+  finalizada boolean not null default false,
   -- Estado de la partida en curso: lo maneja solo el servidor.
-  vidas smallint not null default 3,
+  vidas smallint not null default 3 check (vidas between 0 and 3),
   pregunta_actual_id uuid references trivia.preguntas(id) on delete set null,
   pregunta_servida_at timestamptz,
   finalizada_at timestamptz,
-  created_at timestamptz default now()
+  created_at timestamptz not null default now(),
+  check (preguntas_correctas <= preguntas_totales)
 );
 
 create table if not exists trivia.respuestas_partida (
   id uuid primary key default gen_random_uuid(),
   partida_id uuid references trivia.partidas(id) on delete cascade,
   pregunta_id uuid references trivia.preguntas(id) on delete set null,
-  respuesta_dada integer,
+  -- null = se acabó el tiempo sin responder.
+  respuesta_dada integer check (respuesta_dada between 0 and 3),
   correcta boolean not null,
-  tiempo_respuesta_ms integer,
-  dificultad_en_momento integer not null,
-  created_at timestamptz default now()
+  tiempo_respuesta_ms integer not null check (tiempo_respuesta_ms between 0 and 15000),
+  dificultad_en_momento integer not null check (dificultad_en_momento between 1 and 5),
+  created_at timestamptz not null default now()
 );
 
 -- categoria_id = null representa el modo "Mezclado". Se usa un índice
@@ -101,8 +107,8 @@ create table if not exists trivia.mejores_puntajes (
   id uuid primary key default gen_random_uuid(),
   usuario_id uuid not null references trivia.perfiles(id) on delete cascade,
   categoria_id uuid references trivia.categorias(id) on delete cascade,
-  mejor_puntaje integer not null default 0,
-  partidas_jugadas integer not null default 0,
+  mejor_puntaje integer not null default 0 check (mejor_puntaje >= 0),
+  partidas_jugadas integer not null default 0 check (partidas_jugadas >= 0),
   updated_at timestamptz default now()
 );
 
@@ -140,6 +146,10 @@ create index if not exists idx_mejores_puntajes_ranking
 create unique index if not exists idx_uso_ia_lock_categoria
   on trivia.uso_ia (categoria_id) where estado = 'en_curso';
 create index if not exists idx_uso_ia_usuario_fecha on trivia.uso_ia (usuario_id, created_at);
+
+-- "Ana" y "ana" no pueden ser dos usuarios distintos.
+create unique index if not exists idx_perfiles_nombre_usuario_lower
+  on trivia.perfiles (lower(nombre_usuario));
 
 -- Evita duplicar preguntas (y hace que las semillas sean idempotentes).
 create unique index if not exists idx_preguntas_categoria_texto
