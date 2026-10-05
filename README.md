@@ -140,6 +140,37 @@ Abra [http://localhost:3000](http://localhost:3000).
 > por hora — suficiente para probar, pero para uso real conviene configurar
 > un SMTP propio en **Authentication → Emails**.
 
+## 🐳 Despliegue en la VM (Docker + Caddy)
+
+La app corre en un contenedor (`docker-compose.yml`, servicio `pregunta2`)
+sin puertos publicados: Caddy la alcanza por la red externa `proxy` en
+`http://pregunta2:3000` y termina el HTTPS. Supabase es self-hosted en la
+misma VM y se comparte con otra app.
+
+### URL de Supabase: la pública, también en el servidor
+
+El navegador y el servidor usan la **misma** `NEXT_PUBLIC_SUPABASE_URL`, la
+pública que sirve Caddy (por ejemplo `https://supabase.tudominio.com`), y no
+la URL interna de Docker (`http://kong:8000`). `@supabase/ssr` nombra la
+cookie de sesión a partir del host de esa URL (`sb-<host>-auth-token`): si el
+servidor usara otro host, no encontraría la sesión que guardó el navegador.
+
+Por eso el contenedor tiene que poder resolver y alcanzar ese dominio
+público desde la propia VM. Compruébelo con:
+
+```bash
+docker exec pregunta2 wget -qO- https://supabase.tudominio.com/auth/v1/health
+```
+
+Si falla (algunas redes no permiten que la VM se llame a sí misma por su IP
+pública), agregue en `docker-compose.yml` un `extra_hosts` que apunte el
+dominio al host, donde escucha Caddy:
+
+```yaml
+    extra_hosts:
+      - "supabase.tudominio.com:host-gateway"
+```
+
 ## 📁 Estructura
 
 ```
