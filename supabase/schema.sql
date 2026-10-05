@@ -99,16 +99,19 @@ create table if not exists trivia.respuestas_partida (
   created_at timestamptz not null default now()
 );
 
--- categoria_id = null representa el modo "Mezclado". Se usa un índice
--- único con coalesce porque en SQL, NULL nunca es "igual" a otro NULL,
--- así que un unique(usuario_id, categoria_id) normal NO evitaría filas
--- duplicadas para el modo Mezclado.
+-- categoria_id = null representa el modo "Mezclado". En SQL, NULL nunca es
+-- "igual" a otro NULL, así que un unique(usuario_id, categoria_id) normal NO
+-- evitaría filas duplicadas para el modo Mezclado. Por eso se usa
+-- categoria_clave: la misma categoría, pero con un uuid fijo para Mezclado,
+-- que sirve para el índice único y para buscar posiciones con índice.
 create table if not exists trivia.mejores_puntajes (
   id uuid primary key default gen_random_uuid(),
   usuario_id uuid not null references trivia.perfiles(id) on delete cascade,
   categoria_id uuid references trivia.categorias(id) on delete cascade,
   mejor_puntaje integer not null default 0 check (mejor_puntaje >= 0),
   partidas_jugadas integer not null default 0 check (partidas_jugadas >= 0),
+  categoria_clave uuid not null generated always as
+    (coalesce(categoria_id, '00000000-0000-0000-0000-000000000000'::uuid)) stored,
   updated_at timestamptz default now()
 );
 
@@ -137,8 +140,23 @@ create index if not exists idx_preguntas_categoria_dificultad
 create index if not exists idx_perfiles_puntaje on trivia.perfiles (puntaje_total desc);
 create index if not exists idx_partidas_usuario on trivia.partidas (usuario_id);
 
-create unique index if not exists idx_mejores_puntajes_usuario_categoria
-  on trivia.mejores_puntajes (usuario_id, coalesce(categoria_id, '00000000-0000-0000-0000-000000000000'::uuid));
+-- Índices de claves foráneas (borrados en cascada / set null y joins).
+create index if not exists idx_partidas_categoria on trivia.partidas (categoria_id);
+create index if not exists idx_partidas_pregunta_actual on trivia.partidas (pregunta_actual_id);
+-- También sirve para saber qué preguntas ya salieron en una partida.
+create index if not exists idx_respuestas_partida_partida_pregunta
+  on trivia.respuestas_partida (partida_id, pregunta_id);
+create index if not exists idx_respuestas_partida_pregunta on trivia.respuestas_partida (pregunta_id);
+create index if not exists idx_uso_ia_categoria on trivia.uso_ia (categoria_id);
+
+-- Versión anterior del índice único, con la expresión coalesce.
+drop index if exists trivia.idx_mejores_puntajes_usuario_categoria;
+create unique index if not exists idx_mejores_puntajes_usuario_clave
+  on trivia.mejores_puntajes (usuario_id, categoria_clave);
+-- Para obtener_posicion_categoria.
+create index if not exists idx_mejores_puntajes_clave_puntaje
+  on trivia.mejores_puntajes (categoria_clave, mejor_puntaje desc);
+-- Para el top del ranking, que filtra por categoria_id (o categoria_id is null).
 create index if not exists idx_mejores_puntajes_ranking
   on trivia.mejores_puntajes (categoria_id, mejor_puntaje desc);
 
@@ -239,7 +257,7 @@ begin
 
     insert into trivia.mejores_puntajes (usuario_id, categoria_id, mejor_puntaje, partidas_jugadas)
     values (v_partida.usuario_id, v_partida.categoria_id, v_partida.puntaje, 1)
-    on conflict (usuario_id, coalesce(categoria_id, '00000000-0000-0000-0000-000000000000'::uuid))
+    on conflict (usuario_id, categoria_clave)
     do update set
       mejor_puntaje = greatest(trivia.mejores_puntajes.mejor_puntaje, excluded.mejor_puntaje),
       partidas_jugadas = trivia.mejores_puntajes.partidas_jugadas + 1,
@@ -505,15 +523,15 @@ stable
 security invoker
 set search_path = ''
 as $$
+  -- Compara contra categoria_clave (columna indexada) y no contra una
+  -- expresión, para que Postgres pueda usar los índices.
   select (count(*) + 1)::int
   from trivia.mejores_puntajes
-  where coalesce(categoria_id, '00000000-0000-0000-0000-000000000000'::uuid)
-      = coalesce(p_categoria, '00000000-0000-0000-0000-000000000000'::uuid)
+  where categoria_clave = coalesce(p_categoria, '00000000-0000-0000-0000-000000000000'::uuid)
     and mejor_puntaje > (
       select mejor_puntaje from trivia.mejores_puntajes
       where usuario_id = p_usuario
-        and coalesce(categoria_id, '00000000-0000-0000-0000-000000000000'::uuid)
-          = coalesce(p_categoria, '00000000-0000-0000-0000-000000000000'::uuid)
+        and categoria_clave = coalesce(p_categoria, '00000000-0000-0000-0000-000000000000'::uuid)
     );
 $$;
 
