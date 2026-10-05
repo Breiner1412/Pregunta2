@@ -207,7 +207,8 @@ with check ((select auth.uid()) = id);
 drop policy if exists "Usuarios pueden actualizar su propio perfil" on trivia.perfiles;
 create policy "Usuarios pueden actualizar su propio perfil"
 on trivia.perfiles for update
-using ((select auth.uid()) = id);
+using ((select auth.uid()) = id)
+with check ((select auth.uid()) = id);
 
 alter table trivia.mejores_puntajes enable row level security;
 
@@ -268,6 +269,12 @@ grant execute on all functions in schema trivia to anon, authenticated, service_
 
 -- La lista de admins nunca se escribe desde el navegador.
 revoke insert, update, delete, truncate on trivia.admins from anon, authenticated;
+
+-- Del perfil, el usuario solo puede escribir sus datos públicos. Los
+-- contadores (puntaje_total, partidas_jugadas) los mueve el servidor.
+revoke insert, update, delete, truncate on trivia.perfiles from anon, authenticated;
+grant insert (id, nombre_usuario, avatar_url) on trivia.perfiles to authenticated;
+grant update (nombre_usuario, avatar_url) on trivia.perfiles to authenticated;
 
 
 -- ============================================
