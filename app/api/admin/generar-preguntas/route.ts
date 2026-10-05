@@ -1,4 +1,5 @@
 import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
 import { NextResponse } from 'next/server'
 
 // Generar hasta 25 preguntas puede tardar más que el límite corto por
@@ -11,6 +12,30 @@ const NIVEL_DESCRIPCION: Record<number, string> = {
   3: 'intermedio, para gente con interés en el tema',
   4: 'difícil, para fans dedicados',
   5: 'muy difícil, conocimiento de nicho o experto',
+}
+
+// Cuántas generaciones puede lanzar cada admin por día (cuesta cuota de Gemini).
+const LIMITE_DIARIO_IA_POR_DEFECTO = 10
+
+function limiteDiarioIa(): number {
+  const valor = Number(process.env.IA_LIMITE_DIARIO)
+  return Number.isInteger(valor) && valor > 0 ? valor : LIMITE_DIARIO_IA_POR_DEFECTO
+}
+
+const ERRORES_CUOTA: Record<string, { status: number; mensaje: string }> = {
+  cuota_ia_agotada: { status: 429, mensaje: 'Llegaste al límite diario de generaciones con IA' },
+  generacion_en_curso: { status: 409, mensaje: 'Ya hay una generación en curso para esta categoría' },
+}
+
+type ClienteSupabase = Awaited<ReturnType<typeof createClient>>
+
+interface ResultadoGeneracion {
+  insertadas: number
+  respuesta: NextResponse
+}
+
+function fallo(cuerpo: Record<string, unknown>, status: number): ResultadoGeneracion {
+  return { insertadas: 0, respuesta: NextResponse.json(cuerpo, { status }) }
 }
 
 interface PreguntaGenerada {
@@ -72,6 +97,45 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Categoría no encontrada' }, { status: 404 })
   }
 
+  // Reserva la cuota antes de llamar a la IA; se cierra pase lo que pase.
+  const admin = createAdminClient()
+  const { data: usoId, error: errorCuota } = await admin.rpc('reservar_uso_ia', {
+    p_usuario: user.id,
+    p_categoria: categoriaId,
+    p_cantidad: cantidad,
+    p_limite_diario: limiteDiarioIa(),
+  })
+
+  if (errorCuota) {
+    const conocido = ERRORES_CUOTA[errorCuota.message]
+    if (conocido) {
+      return NextResponse.json({ error: conocido.mensaje }, { status: conocido.status })
+    }
+    console.error('[generar-preguntas] reservar_uso_ia', errorCuota)
+    return NextResponse.json({ error: 'Error interno' }, { status: 500 })
+  }
+
+  let insertadas = 0
+  try {
+    const resultado = await generarYGuardar(supabase, categoriaId, categoria.nombre, cantidad, dificultad)
+    insertadas = resultado.insertadas
+    return resultado.respuesta
+  } finally {
+    const { error: errorCierre } = await admin.rpc('cerrar_uso_ia', {
+      p_uso: usoId,
+      p_insertadas: insertadas,
+    })
+    if (errorCierre) console.error('[generar-preguntas] cerrar_uso_ia', errorCierre)
+  }
+}
+
+async function generarYGuardar(
+  supabase: ClienteSupabase,
+  categoriaId: string,
+  nombreCategoria: string,
+  cantidad: number,
+  dificultad: number | undefined
+): Promise<ResultadoGeneracion> {
   const { data: existentes } = await supabase
     .from('preguntas')
     .select('pregunta')
@@ -86,7 +150,7 @@ export async function POST(request: Request) {
       ? `Todas las preguntas deben ser de dificultad ${dificultad} (${NIVEL_DESCRIPCION[dificultad]}).`
       : 'Distribuye las preguntas de forma pareja entre los 5 niveles de dificultad.'
 
-  const prompt = `Genera exactamente ${cantidad} preguntas de trivia en español sobre "${categoria.nombre}" para un juego de trivias.
+  const prompt = `Genera exactamente ${cantidad} preguntas de trivia en español sobre "${nombreCategoria}" para un juego de trivias.
 
 Reglas:
 - Español neutro, preguntas claras y sin ambigüedad.
@@ -139,21 +203,21 @@ ${listaExistentes.map((p) => `  - ${p}`).join('\n') || '  (ninguna todavía)'}`
       }
     )
   } catch {
-    return NextResponse.json({ error: 'No se pudo contactar a la IA' }, { status: 502 })
+    return fallo({ error: 'No se pudo contactar a la IA' }, 502)
   }
 
   if (!iaResponse.ok) {
     const detalle = await iaResponse.text()
-    return NextResponse.json({ error: 'Error de la IA', detalle }, { status: 502 })
+    return fallo({ error: 'Error de la IA', detalle }, 502)
   }
 
   const iaData = await iaResponse.json()
   const textoJson = iaData.candidates?.[0]?.content?.parts?.[0]?.text
 
   if (!textoJson) {
-    return NextResponse.json(
+    return fallo(
       { error: 'La IA no devolvió contenido', detalle: iaData },
-      { status: 502 }
+      502
     )
   }
 
@@ -161,16 +225,16 @@ ${listaExistentes.map((p) => `  - ${p}`).join('\n') || '  (ninguna todavía)'}`
   try {
     parseado = JSON.parse(textoJson)
   } catch {
-    return NextResponse.json({ error: 'La IA devolvió JSON inválido' }, { status: 502 })
+    return fallo({ error: 'La IA devolvió JSON inválido' }, 502)
   }
 
   const generadas = parseado.preguntas ?? []
   const validas = generadas.filter(esPreguntaValida)
 
   if (validas.length === 0) {
-    return NextResponse.json(
+    return fallo(
       { error: 'Ninguna pregunta generada pasó la validación' },
-      { status: 502 }
+      502
     )
   }
 
@@ -188,11 +252,14 @@ ${listaExistentes.map((p) => `  - ${p}`).join('\n') || '  (ninguna todavía)'}`
   const { error: errorInsert } = await supabase.from('preguntas').insert(filas)
 
   if (errorInsert) {
-    return NextResponse.json({ error: errorInsert.message }, { status: 500 })
+    return fallo({ error: errorInsert.message }, 500)
   }
 
-  return NextResponse.json({
+  return {
     insertadas: filas.length,
-    descartadas: generadas.length - validas.length,
-  })
+    respuesta: NextResponse.json({
+      insertadas: filas.length,
+      descartadas: generadas.length - validas.length,
+    }),
+  }
 }

@@ -107,6 +107,21 @@ create table if not exists trivia.mejores_puntajes (
 );
 
 
+-- Registro de cada generación de preguntas con IA: sirve de cuota diaria
+-- por admin y de lock por categoría. Solo lo toca el servidor.
+create table if not exists trivia.uso_ia (
+  id uuid primary key default gen_random_uuid(),
+  usuario_id uuid not null references auth.users(id) on delete cascade,
+  categoria_id uuid references trivia.categorias(id) on delete set null,
+  cantidad_pedida integer not null,
+  estado text not null default 'en_curso'
+    check (estado in ('en_curso', 'ok', 'error', 'expirado')),
+  insertadas integer not null default 0,
+  created_at timestamptz not null default now(),
+  finalizada_at timestamptz
+);
+
+
 -- ============================================
 -- Índices
 -- ============================================
@@ -120,6 +135,11 @@ create unique index if not exists idx_mejores_puntajes_usuario_categoria
   on trivia.mejores_puntajes (usuario_id, coalesce(categoria_id, '00000000-0000-0000-0000-000000000000'::uuid));
 create index if not exists idx_mejores_puntajes_ranking
   on trivia.mejores_puntajes (categoria_id, mejor_puntaje desc);
+
+-- Solo una generación en curso por categoría (el lock de uso_ia).
+create unique index if not exists idx_uso_ia_lock_categoria
+  on trivia.uso_ia (categoria_id) where estado = 'en_curso';
+create index if not exists idx_uso_ia_usuario_fecha on trivia.uso_ia (usuario_id, created_at);
 
 -- Evita duplicar preguntas (y hace que las semillas sean idempotentes).
 create unique index if not exists idx_preguntas_categoria_texto
@@ -402,6 +422,71 @@ begin
 end;
 $$;
 
+-- --------------------------------------------
+-- Límite de uso de la IA
+-- --------------------------------------------
+
+-- Reserva una generación: falla con 'cuota_ia_agotada' si el admin ya hizo
+-- p_limite_diario generaciones hoy, o con 'generacion_en_curso' si ya hay
+-- una corriendo para esa categoría. Devuelve el id a cerrar al terminar.
+create or replace function trivia.reservar_uso_ia(
+  p_usuario uuid,
+  p_categoria uuid,
+  p_cantidad int,
+  p_limite_diario int
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_usadas int;
+  v_id uuid;
+begin
+  -- Un lock que quedó colgado (por ejemplo, si el proceso murió) caduca a los 5 minutos.
+  update trivia.uso_ia
+  set estado = 'expirado', finalizada_at = now()
+  where estado = 'en_curso' and created_at < now() - interval '5 minutes';
+
+  -- Serializa las reservas de un mismo admin para que dos pedidos
+  -- simultáneos no superen juntos el límite.
+  perform pg_advisory_xact_lock(hashtextextended('trivia.uso_ia:' || p_usuario::text, 0));
+
+  select count(*) into v_usadas
+  from trivia.uso_ia
+  where usuario_id = p_usuario and created_at >= date_trunc('day', now());
+
+  if v_usadas >= p_limite_diario then
+    raise exception 'cuota_ia_agotada' using errcode = 'P0001';
+  end if;
+
+  begin
+    insert into trivia.uso_ia (usuario_id, categoria_id, cantidad_pedida)
+    values (p_usuario, p_categoria, p_cantidad)
+    returning id into v_id;
+  exception when unique_violation then
+    raise exception 'generacion_en_curso' using errcode = 'P0001';
+  end;
+
+  return v_id;
+end;
+$$;
+
+-- Cierra una generación reservada y libera el lock de su categoría.
+create or replace function trivia.cerrar_uso_ia(p_uso uuid, p_insertadas int)
+returns void
+language sql
+security definer
+set search_path = ''
+as $$
+  update trivia.uso_ia
+  set estado = case when p_insertadas > 0 then 'ok' else 'error' end,
+      insertadas = p_insertadas,
+      finalizada_at = now()
+  where id = p_uso and estado = 'en_curso';
+$$;
+
 -- Posición exacta de un usuario dentro de una categoría (o Mezclado)
 create or replace function trivia.obtener_posicion_categoria(p_usuario uuid, p_categoria uuid)
 returns int
@@ -490,6 +575,9 @@ using (
     where p.id = partida_id and p.usuario_id = (select auth.uid())
   )
 );
+
+-- Sin políticas: solo la usa el servidor (service_role ignora RLS).
+alter table trivia.uso_ia enable row level security;
 
 alter table trivia.mejores_puntajes enable row level security;
 
