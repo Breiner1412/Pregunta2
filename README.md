@@ -257,6 +257,52 @@ Para enviar los magic links también hace falta un SMTP propio en ese mismo
 `.env` (`SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`,
 `SMTP_ADMIN_EMAIL`, `SMTP_SENDER_NAME`).
 
+### Migrar los datos desde Supabase en la nube
+
+[`scripts/migracion/migrar-datos.sh`](./scripts/migracion/migrar-datos.sh)
+exporta con `pg_dump` las tablas del esquema `public` del proyecto en la
+nube y las importa al esquema `trivia` del Supabase de la VM. Solo necesita
+Docker (corre `pg_dump` y `psql` en un contenedor `postgres:17-alpine`).
+
+1. Aplique antes `supabase/schema.sql` en el destino.
+2. Consiga las dos conexiones:
+   - **Origen (nube):** en el dashboard, **Connect → Session pooler**
+     (sirve por IPv4), por ejemplo
+     `postgresql://postgres.<ref>:<clave>@aws-0-<región>.pooler.supabase.com:5432/postgres`.
+   - **Destino (VM):** el Postgres del Supabase self-hosted, por ejemplo
+     `postgresql://postgres:<POSTGRES_PASSWORD>@localhost:5432/postgres`.
+     Si su puerto 5432 pasa por Supavisor, el usuario es
+     `postgres.<POOLER_TENANT_ID>`.
+3. Ejecútelo desde la raíz del repo, en la VM:
+
+```bash
+ORIGEN_DB_URL='postgresql://...nube...' \
+DESTINO_DB_URL='postgresql://...vm...' \
+bash scripts/migracion/migrar-datos.sh
+```
+
+Qué hace:
+
+- **Categorías:** se emparejan por `slug` con las que ya creó
+  `schema.sql`, y se actualizan.
+- **Preguntas:** conservan su id y su estado. Las generadas por IA sin
+  revisar siguen pendientes en `/admin/preguntas`.
+  - Se saltan las que no cumplen las restricciones (4 opciones, respuesta
+    0–3, dificultad 1–5) y las que ya existen.
+  - Al final muestra un resumen con cuántas había y cuántas entraron.
+- **Una sola transacción:** si algo falla, el destino no cambia.
+- **Idempotente:** se puede volver a correr sin duplicar nada.
+
+Con `--con-perfiles` también migra perfiles, mejores puntajes y admins
+(`es_admin` pasa a `trivia.admins`), pero **solo** de usuarios que ya
+existan con el mismo id en el `auth.users` del Supabase nuevo; el resto
+tendrá que volver a crear su perfil al entrar. El historial de partidas
+no se migra.
+
+Si el `localhost` de la VM no llega a la base (por ejemplo, porque Postgres
+solo escucha en la red de Docker de Supabase), use
+`DOCKER_RED=<red-de-supabase>` y el nombre del contenedor como host.
+
 ## 📁 Estructura
 
 ```
@@ -269,6 +315,8 @@ app/
     admin/generar-preguntas/          → llama a Gemini y guarda preguntas sin revisar
 lib/supabase/                  → clientes de Supabase (navegador / servidor / service_role)
 supabase/schema.sql              → tablas, políticas RLS y funciones, listo para correr
+scripts/migracion/               → migración de datos desde Supabase en la nube
+Dockerfile, docker-compose.yml   → imagen standalone y servicio detrás de Caddy
 ```
 
 ## 🗺️ Roadmap
