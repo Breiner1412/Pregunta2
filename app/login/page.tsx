@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
+import { urlDelSitio } from '@/lib/sitio'
 import Link from 'next/link'
 
 type Modo = 'magic' | 'password'
@@ -30,7 +31,7 @@ export default function LoginPage() {
     const { error } = await supabase.auth.signInWithOtp({
       email,
       options: {
-        emailRedirectTo: `${window.location.origin}/auth/callback`,
+        emailRedirectTo: `${urlDelSitio(window.location.origin)}/auth/callback`,
       },
     })
 
