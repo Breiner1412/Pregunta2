@@ -94,6 +94,7 @@ Cree un archivo `.env.local` en la raíz:
 ```
 NEXT_PUBLIC_SUPABASE_URL=https://xxxxxxxxxxx.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGci...
+SUPABASE_SERVICE_ROLE_KEY=eyJhbGci...   # solo servidor
 GEMINI_API_KEY=...
 ```
 

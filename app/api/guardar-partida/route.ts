@@ -1,4 +1,5 @@
 import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
 import { NextResponse } from 'next/server'
 
 export const maxDuration = 30
@@ -76,7 +77,10 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Ninguna respuesta válida' }, { status: 400 })
   }
 
-  const { data: partida, error: errorPartida } = await supabase
+  // Las escrituras de partidas y puntajes solo las hace el servidor.
+  const admin = createAdminClient()
+
+  const { data: partida, error: errorPartida } = await admin
     .from('partidas')
     .insert({
       usuario_id: user?.id ?? null,
@@ -95,15 +99,15 @@ export async function POST(request: Request) {
   }
 
   const filasConPartida = filasRespuestas.map((f) => ({ ...f, partida_id: partida.id }))
-  const { error: errorRespuestas } = await supabase.from('respuestas_partida').insert(filasConPartida)
+  const { error: errorRespuestas } = await admin.from('respuestas_partida').insert(filasConPartida)
 
   if (errorRespuestas) {
     return NextResponse.json({ error: errorRespuestas.message }, { status: 500 })
   }
 
   if (user) {
-    await supabase.rpc('incrementar_puntaje_usuario', { usuario: user.id, puntos_ganados: puntaje })
-    await supabase.rpc('registrar_mejor_puntaje', {
+    await admin.rpc('incrementar_puntaje_usuario', { usuario: user.id, puntos_ganados: puntaje })
+    await admin.rpc('registrar_mejor_puntaje', {
       p_usuario: user.id,
       p_categoria: categoriaId,
       p_puntaje: puntaje,
