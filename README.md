@@ -171,6 +171,29 @@ dominio al host, donde escucha Caddy:
       - "supabase.tudominio.com:host-gateway"
 ```
 
+### Supabase self-hosted: exponer el esquema `trivia`
+
+La API REST de Supabase (PostgREST) solo ve los esquemas listados en
+`PGRST_DB_SCHEMAS`. Sin `trivia` ahí, todas las llamadas de la app fallan
+con `406` / "Invalid schema". En el `.env` del Supabase self-hosted
+(el `docker/.env` del repositorio de Supabase), **agregue** `trivia` sin
+quitar los esquemas que ya usa la otra app:
+
+```env
+PGRST_DB_SCHEMAS=public,storage,graphql_public,trivia
+```
+
+Luego aplique `supabase/schema.sql` (ver "Base de datos") y reinicie el
+servicio REST para que tome el cambio:
+
+```bash
+docker compose up -d rest
+```
+
+`schema.sql` ya otorga los permisos del esquema (`USAGE`, tablas y
+funciones) a `anon`, `authenticated` y `service_role`, y al final pide a
+PostgREST que recargue el esquema (`notify pgrst, 'reload schema'`).
+
 ## 📁 Estructura
 
 ```
