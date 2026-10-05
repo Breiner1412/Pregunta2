@@ -363,6 +363,11 @@ begin
     where p.activa
       and p.revisada
       and (v_partida.modo = 'mixto' or p.categoria_id = v_partida.categoria_id)
+      -- Una categoría desactivada no aporta preguntas (tampoco en Mezclado).
+      and exists (
+        select 1 from trivia.categorias c
+        where c.id = p.categoria_id and c.activa
+      )
       and not exists (
         select 1 from trivia.respuestas_partida r
         where r.partida_id = v_partida.id and r.pregunta_id = p.id
