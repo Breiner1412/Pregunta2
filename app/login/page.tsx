@@ -1,7 +1,7 @@
 'use client'
 
-import { useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { Suspense, useState } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { urlDelSitio } from '@/lib/sitio'
 import Link from 'next/link'
@@ -11,9 +11,22 @@ type Modo = 'magic' | 'password'
 const inputClass =
   'w-full p-3 rounded-xl bg-ink border border-white/10 text-paper placeholder:text-ink-soft focus:border-accent focus:outline-none transition'
 
+// /auth/callback vuelve aquí con ?error=auth si el link no sirvió.
+const MENSAJE_ERROR_CALLBACK =
+  'No se pudo iniciar sesión con ese link: puede haber vencido o ya se usó. Pide uno nuevo.'
+
 export default function LoginPage() {
+  return (
+    <Suspense fallback={null}>
+      <LoginForm />
+    </Suspense>
+  )
+}
+
+function LoginForm() {
   const supabase = createClient()
   const router = useRouter()
+  const searchParams = useSearchParams()
 
   const [modo, setModo] = useState<Modo>('magic')
   const [email, setEmail] = useState('')
@@ -21,7 +34,9 @@ export default function LoginPage() {
 
   const [enviado, setEnviado] = useState(false)
   const [cargando, setCargando] = useState(false)
-  const [error, setError] = useState('')
+  const [error, setError] = useState(() =>
+    searchParams.get('error') === 'auth' ? MENSAJE_ERROR_CALLBACK : ''
+  )
 
   async function enviarMagicLink(e: React.FormEvent) {
     e.preventDefault()

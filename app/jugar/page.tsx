@@ -106,6 +106,9 @@ export default function JugarPage() {
     null
   )
   const [cargandoSesion, setCargandoSesion] = useState(true)
+  // Sesión iniciada pero sin perfil de trivia (por ejemplo, alguien que viene
+  // de la otra app): juega como invitado hasta que complete su perfil.
+  const [sinPerfil, setSinPerfil] = useState(false)
 
   useEffect(() => {
     async function cargarCategorias() {
@@ -134,6 +137,8 @@ export default function JugarPage() {
 
         if (perfil) {
           setUsuario({ id: user.id, nombreUsuario: perfil.nombre_usuario, esAdmin: esAdmin === true })
+        } else {
+          setSinPerfil(true)
         }
       }
       setCargandoSesion(false)
@@ -145,6 +150,7 @@ export default function JugarPage() {
   async function cerrarSesion() {
     await supabase.auth.signOut()
     setUsuario(null)
+    setSinPerfil(false)
   }
 
   function finalizar(resultado: ResultadoPartida, motivo: MotivoFin) {
@@ -287,6 +293,10 @@ export default function JugarPage() {
                   Cerrar sesión
                 </button>
               </div>
+            ) : sinPerfil ? (
+              <Link href="/completar-perfil" className="text-accent hover:underline">
+                Completa tu perfil para guardar tu ranking →
+              </Link>
             ) : (
               <Link href="/login" className="text-accent hover:underline">
                 Iniciar sesión para guardar tu ranking →
@@ -424,7 +434,11 @@ export default function JugarPage() {
         )}
 
         <p className="text-sm text-ink-soft mt-4 min-h-[20px]">
-          {usuario ? 'Guardado en tu cuenta ✓' : 'Partida de invitado (no suma al ranking)'}
+          {usuario
+            ? 'Guardado en tu cuenta ✓'
+            : sinPerfil
+              ? 'Sin perfil de trivia: esta partida no suma al ranking'
+              : 'Partida de invitado (no suma al ranking)'}
         </p>
       </div>
 
