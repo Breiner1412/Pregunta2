@@ -31,6 +31,15 @@ export const esquemaResponderPregunta = z.object({
     .default(null),
 })
 
+export const MAX_PREGUNTAS_POR_GENERACION = 25
+
+export const esquemaGenerarPreguntas = z.object({
+  categoria_id: esquemaUuid,
+  cantidad: z.int().min(1).max(MAX_PREGUNTAS_POR_GENERACION).default(10),
+  // Sin dificultad = repartidas entre los 5 niveles.
+  dificultad: z.int().min(1).max(5).optional(),
+})
+
 // Lee el cuerpo JSON y lo valida contra `esquema`. Devuelve null si no es
 // JSON o no cumple el esquema.
 export async function leerCuerpoValidado<T extends z.ZodType>(

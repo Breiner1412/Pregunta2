@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { verificarAdmin } from '@/lib/admin'
+import { esquemaGenerarPreguntas, leerCuerpoValidado } from '@/lib/validacion'
 import { NextResponse } from 'next/server'
 
 // Generar hasta 25 preguntas puede tardar más que el límite corto por
@@ -71,14 +72,14 @@ export async function POST(request: Request) {
   if (!verificacion.ok) return verificacion.respuesta
   const { supabase, usuarioId } = verificacion
 
-  const body = await request.json()
-  const categoriaId: string | undefined = body.categoria_id
-  const cantidad = Math.min(Math.max(Number(body.cantidad) || 10, 1), 25)
-  const dificultad: number | undefined = body.dificultad ? Number(body.dificultad) : undefined
-
-  if (!categoriaId) {
-    return NextResponse.json({ error: 'Falta categoria_id' }, { status: 400 })
+  const cuerpo = await leerCuerpoValidado(request, esquemaGenerarPreguntas)
+  if (!cuerpo) {
+    return NextResponse.json(
+      { error: 'Datos inválidos: categoría, cantidad (1 a 25) y dificultad (1 a 5)' },
+      { status: 400 }
+    )
   }
+  const { categoria_id: categoriaId, cantidad, dificultad } = cuerpo
 
   const { data: categoria } = await supabase
     .from('categorias')
