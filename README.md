@@ -89,17 +89,10 @@ cd anime-trivia
 npm install
 ```
 
-Cree un archivo `.env.local` en la raíz:
-
-```
-NEXT_PUBLIC_SUPABASE_URL=https://xxxxxxxxxxx.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGci...
-SUPABASE_SERVICE_ROLE_KEY=eyJhbGci...   # solo servidor
-GEMINI_API_KEY=...
-```
-
-La URL y la key de Supabase están en **Project Settings → Data API** y
-**→ API Keys** de su proyecto.
+Copie [`.env.example`](./.env.example) como `.env.local` y complete los
+valores (ahí está explicada cada variable). En desarrollo use
+`NEXT_PUBLIC_SITE_URL=http://localhost:3000`. Si falta alguna variable
+obligatoria, el servidor no arranca y lista cuáles faltan.
 
 ### Base de datos
 
@@ -159,6 +152,40 @@ La app corre en un contenedor (`docker-compose.yml`, servicio `pregunta2`)
 sin puertos publicados: Caddy la alcanza por la red externa `proxy` en
 `http://pregunta2:3000` y termina el HTTPS. Supabase es self-hosted en la
 misma VM y se comparte con otra app.
+
+### Variables de entorno
+
+| Variable | Dónde se usa | Cuándo |
+| --- | --- | --- |
+| `NEXT_PUBLIC_SUPABASE_URL` | navegador y servidor | build (arg) |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | navegador y servidor | build (arg) |
+| `NEXT_PUBLIC_SITE_URL` | redirects del login | build (arg) |
+| `SUPABASE_SERVICE_ROLE_KEY` | solo servidor | runtime |
+| `GEMINI_API_KEY` | solo servidor | runtime |
+| `GEMINI_MODEL` | solo servidor (opcional) | runtime |
+| `IA_LIMITE_DIARIO` | solo servidor (opcional) | runtime |
+
+Las `NEXT_PUBLIC_*` se incrustan en el JavaScript al compilar: si cambian,
+reconstruya la imagen. Las demás se leen al arrancar el contenedor.
+
+### Levantar la app
+
+```bash
+cp .env.example .env            # y complete los valores
+docker network create proxy     # una sola vez, si Caddy aún no la creó
+docker compose up -d --build
+docker compose logs -f pregunta2
+```
+
+En el `Caddyfile`, apunte el dominio de la app al contenedor:
+
+```caddy
+trivia.tudominio.com {
+	reverse_proxy pregunta2:3000
+}
+```
+
+El contenedor tiene un healthcheck sobre `/api/health`.
 
 ### URL de Supabase: la pública, también en el servidor
 
