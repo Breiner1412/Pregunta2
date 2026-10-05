@@ -109,7 +109,7 @@ políticas de seguridad (RLS) y funciones necesarias.
 Hágase administrador para poder generar preguntas:
 
 ```sql
-update perfiles set es_admin = true where nombre_usuario = 'su_usuario';
+update trivia.perfiles set es_admin = true where nombre_usuario = 'su_usuario';
 ```
 
 Configure en Supabase → **Authentication → URL Configuration**:
