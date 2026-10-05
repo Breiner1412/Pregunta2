@@ -1,5 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
+import { verificarAdmin } from '@/lib/admin'
 import { NextResponse } from 'next/server'
 
 // Generar hasta 25 preguntas puede tardar más que el límite corto por
@@ -66,21 +67,9 @@ function esPreguntaValida(p: PreguntaGenerada): boolean {
 }
 
 export async function POST(request: Request) {
-  const supabase = await createClient()
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'No autenticado' }, { status: 401 })
-  }
-
-  const { data: esAdmin } = await supabase.rpc('es_admin')
-
-  if (esAdmin !== true) {
-    return NextResponse.json({ error: 'No autorizado' }, { status: 403 })
-  }
+  const verificacion = await verificarAdmin()
+  if (!verificacion.ok) return verificacion.respuesta
+  const { supabase, usuarioId } = verificacion
 
   const body = await request.json()
   const categoriaId: string | undefined = body.categoria_id
@@ -104,7 +93,7 @@ export async function POST(request: Request) {
   // Reserva la cuota antes de llamar a la IA; se cierra pase lo que pase.
   const admin = createAdminClient()
   const { data: usoId, error: errorCuota } = await admin.rpc('reservar_uso_ia', {
-    p_usuario: user.id,
+    p_usuario: usuarioId,
     p_categoria: categoriaId,
     p_cantidad: cantidad,
     p_limite_diario: limiteDiarioIa(),

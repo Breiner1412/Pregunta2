@@ -1,17 +1,14 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import type { Categoria, Pregunta } from '@/types/game'
 
+// El acceso se verifica en el servidor (app/admin/layout.tsx): si esta
+// página se renderiza, la sesión es de un admin.
 export default function AdminPreguntasPage() {
   const supabase = createClient()
-  const router = useRouter()
-
-  const [verificando, setVerificando] = useState(true)
-  const [esAdmin, setEsAdmin] = useState(false)
 
   const [categorias, setCategorias] = useState<Categoria[]>([])
   const [categoriaId, setCategoriaId] = useState('')
@@ -24,30 +21,6 @@ export default function AdminPreguntasPage() {
   const [pendientes, setPendientes] = useState<Pregunta[]>([])
   const [cargandoPendientes, setCargandoPendientes] = useState(true)
 
-  useEffect(() => {
-    async function verificar() {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser()
-
-      if (!user) {
-        router.replace('/login')
-        return
-      }
-
-      const { data: esAdminDb } = await supabase.rpc('es_admin')
-
-      if (esAdminDb !== true) {
-        router.replace('/jugar')
-        return
-      }
-
-      setEsAdmin(true)
-      setVerificando(false)
-    }
-    verificar()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
 
   useEffect(() => {
     async function cargarCategorias() {
@@ -76,8 +49,6 @@ export default function AdminPreguntasPage() {
   }, [supabase])
 
   useEffect(() => {
-    if (!esAdmin) return
-
     async function cargarInicial() {
       const { data } = await supabase
         .from('preguntas')
@@ -89,7 +60,7 @@ export default function AdminPreguntasPage() {
     }
     cargarInicial()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [esAdmin])
+  }, [])
 
   async function generar() {
     if (!categoriaId) return
@@ -126,13 +97,14 @@ export default function AdminPreguntasPage() {
     }
   }
 
+  // Aprobar y rechazar pasan por el servidor, que vuelve a verificar el rol.
   async function aprobar(id: string) {
-    await supabase.from('preguntas').update({ revisada: true }).eq('id', id)
+    await fetch(`/api/admin/preguntas/${id}`, { method: 'PATCH' })
     setPendientes((prev) => prev.filter((p) => p.id !== id))
   }
 
   async function rechazar(id: string) {
-    await supabase.from('preguntas').delete().eq('id', id)
+    await fetch(`/api/admin/preguntas/${id}`, { method: 'DELETE' })
     setPendientes((prev) => prev.filter((p) => p.id !== id))
   }
 
@@ -140,9 +112,6 @@ export default function AdminPreguntasPage() {
     return categorias.find((c) => c.id === id)?.nombre ?? '???'
   }
 
-  if (verificando || !esAdmin) {
-    return <div className="p-6 text-center mt-10 sm:mt-20 text-ink-soft">Verificando acceso...</div>
-  }
 
   return (
     <div className="max-w-2xl mx-auto p-6">
