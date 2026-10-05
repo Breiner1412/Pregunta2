@@ -14,6 +14,10 @@ const NIVEL_DESCRIPCION: Record<number, string> = {
   5: 'muy difícil, conocimiento de nicho o experto',
 }
 
+// Tiempo máximo de espera a Gemini. Así una llamada colgada no deja la
+// petición (ni el lock de la categoría) abiertos indefinidamente.
+const TIMEOUT_IA_MS = 45_000
+
 // Cuántas generaciones puede lanzar cada admin por día (cuesta cuota de Gemini).
 const LIMITE_DIARIO_IA_POR_DEFECTO = 10
 
@@ -200,9 +204,13 @@ ${listaExistentes.map((p) => `  - ${p}`).join('\n') || '  (ninguna todavía)'}`
             maxOutputTokens: 8192,
           },
         }),
+        signal: AbortSignal.timeout(TIMEOUT_IA_MS),
       }
     )
-  } catch {
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'TimeoutError') {
+      return fallo({ error: 'La IA tardó demasiado en responder, intenta de nuevo' }, 504)
+    }
     return fallo({ error: 'No se pudo contactar a la IA' }, 502)
   }
 
