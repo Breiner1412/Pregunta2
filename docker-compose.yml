@@ -10,6 +10,12 @@ services:
     image: pregunta2:latest
     build:
       context: .
+      # Se incrustan en el bundle del navegador al compilar: si cambian,
+      # hay que reconstruir la imagen (docker compose up -d --build).
+      args:
+        NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL:?falta en .env}
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY:?falta en .env}
+        NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL:?falta en .env}
     restart: unless-stopped
     env_file: .env
     networks:

@@ -12,6 +12,18 @@ RUN npm ci
 FROM node:22-alpine AS build
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
+
+# Las NEXT_PUBLIC_* se incrustan en el JavaScript del navegador durante
+# next build: cambiarlas después en runtime no tiene efecto. Por eso
+# llegan como build args (desde docker-compose, que las toma de .env).
+# Son públicas por diseño; los secretos NUNCA van como build args.
+ARG NEXT_PUBLIC_SUPABASE_URL
+ARG NEXT_PUBLIC_SUPABASE_ANON_KEY
+ARG NEXT_PUBLIC_SITE_URL
+ENV NEXT_PUBLIC_SUPABASE_URL=$NEXT_PUBLIC_SUPABASE_URL \
+    NEXT_PUBLIC_SUPABASE_ANON_KEY=$NEXT_PUBLIC_SUPABASE_ANON_KEY \
+    NEXT_PUBLIC_SITE_URL=$NEXT_PUBLIC_SITE_URL
+
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN npm run build
