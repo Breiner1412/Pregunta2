@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { verificarAdmin } from '@/lib/admin'
+import { env } from '@/lib/env'
 import { esquemaGenerarPreguntas, leerCuerpoValidado } from '@/lib/validacion'
 import { NextResponse } from 'next/server'
 
@@ -21,13 +22,6 @@ const NIVEL_DESCRIPCION: Record<number, string> = {
 // petición (ni el lock de la categoría) abiertos indefinidamente.
 const TIMEOUT_IA_MS = 45_000
 
-// Cuántas generaciones puede lanzar cada admin por día (cuesta cuota de Gemini).
-const LIMITE_DIARIO_IA_POR_DEFECTO = 10
-
-function limiteDiarioIa(): number {
-  const valor = Number(process.env.IA_LIMITE_DIARIO)
-  return Number.isInteger(valor) && valor > 0 ? valor : LIMITE_DIARIO_IA_POR_DEFECTO
-}
 
 const ERRORES_CUOTA: Record<string, { status: number; mensaje: string }> = {
   cuota_ia_agotada: { status: 429, mensaje: 'Llegaste al límite diario de generaciones con IA' },
@@ -118,7 +112,8 @@ export async function POST(request: Request) {
     p_usuario: usuarioId,
     p_categoria: categoriaId,
     p_cantidad: cantidad,
-    p_limite_diario: limiteDiarioIa(),
+    // Cuántas generaciones puede lanzar cada admin por día (cuesta cuota de Gemini).
+    p_limite_diario: env().IA_LIMITE_DIARIO,
   })
 
   if (errorCuota) {
@@ -205,7 +200,7 @@ ${listaExistentes.map((p) => `  - ${p}`).join('\n') || '  (ninguna todavía)'}`
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          'x-goog-api-key': process.env.GEMINI_API_KEY!,
+          'x-goog-api-key': env().GEMINI_API_KEY,
         },
         body: JSON.stringify({
           contents: [{ parts: [{ text: prompt }] }],
