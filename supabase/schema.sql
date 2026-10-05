@@ -492,10 +492,14 @@ drop policy if exists "Usuarios pueden actualizar su propio mejor puntaje" on tr
 
 alter table trivia.preguntas enable row level security;
 
+-- Las preguntas (con su respuesta correcta) solo las leen los admins.
+-- Los jugadores las reciben de una en una desde el servidor, sin la
+-- respuesta, a través de servir_siguiente_pregunta.
 drop policy if exists "Preguntas son públicas para lectura" on trivia.preguntas;
-create policy "Preguntas son públicas para lectura"
+drop policy if exists "Solo administradores pueden leer preguntas" on trivia.preguntas;
+create policy "Solo administradores pueden leer preguntas"
 on trivia.preguntas for select
-using (true);
+using ((select trivia.es_admin()));
 
 drop policy if exists "Solo administradores pueden insertar preguntas" on trivia.preguntas;
 create policy "Solo administradores pueden insertar preguntas"
