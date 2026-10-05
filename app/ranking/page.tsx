@@ -7,18 +7,22 @@ import type { Categoria, PerfilRanking } from '@/types/game'
 
 const TOP_N = 20
 
+// Fila de mejores_puntajes con el perfil embebido; los tipos generados de
+// Supabase ya la describen, así que no hace falta castear.
 interface FilaEmbebida {
   usuario_id: string
   mejor_puntaje: number
   partidas_jugadas: number
-  perfiles: { nombre_usuario: string } | { nombre_usuario: string }[] | null
+  perfiles: { nombre_usuario: string } | null
 }
 
-function nombreDesdeFila(fila: FilaEmbebida): string {
-  if (!fila.perfiles) return '???'
-  return Array.isArray(fila.perfiles)
-    ? (fila.perfiles[0]?.nombre_usuario ?? '???')
-    : fila.perfiles.nombre_usuario
+function aEntrada(fila: FilaEmbebida): PerfilRanking {
+  return {
+    usuario_id: fila.usuario_id,
+    mejor_puntaje: fila.mejor_puntaje,
+    partidas_jugadas: fila.partidas_jugadas,
+    nombre_usuario: fila.perfiles?.nombre_usuario ?? '???',
+  }
 }
 
 export default function RankingPage() {
@@ -71,14 +75,7 @@ export default function RankingPage() {
         : query.is('categoria_id', null)
 
       const { data } = await query
-      const filas = (data ?? []) as unknown as FilaEmbebida[]
-
-      const entradas: PerfilRanking[] = filas.map((f) => ({
-        usuario_id: f.usuario_id,
-        mejor_puntaje: f.mejor_puntaje,
-        partidas_jugadas: f.partidas_jugadas,
-        nombre_usuario: nombreDesdeFila(f),
-      }))
+      const entradas = (data ?? []).map(aEntrada)
 
       if (cancelado) return
       setRanking(entradas)
@@ -101,13 +98,7 @@ export default function RankingPage() {
           if (cancelado) return
 
           if (propioData) {
-            const f = propioData as unknown as FilaEmbebida
-            setPropio({
-              usuario_id: f.usuario_id,
-              mejor_puntaje: f.mejor_puntaje,
-              partidas_jugadas: f.partidas_jugadas,
-              nombre_usuario: nombreDesdeFila(f),
-            })
+            setPropio(aEntrada(propioData))
 
             const { data: posicion } = await supabase.rpc('obtener_posicion_categoria', {
               p_usuario: usuarioId,
