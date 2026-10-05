@@ -20,10 +20,20 @@ function aPreguntas(filas: FilaPendiente[] | null): Pregunta[] {
   })
 }
 
+async function consultarPendientes(supabase: ReturnType<typeof createClient>): Promise<Pregunta[]> {
+  const { data } = await supabase
+    .from('preguntas')
+    .select('id, categoria_id, pregunta, opciones, respuesta_correcta, dificultad')
+    .eq('revisada', false)
+    .order('created_at', { ascending: false })
+  return aPreguntas(data)
+}
+
 // El acceso se verifica en el servidor (app/admin/layout.tsx): si esta
 // página se renderiza, la sesión es de un admin.
 export default function AdminPreguntasPage() {
-  const supabase = createClient()
+  // useState mantiene el mismo cliente entre renders (identidad estable para los efectos).
+  const [supabase] = useState(createClient)
 
   const [categorias, setCategorias] = useState<Categoria[]>([])
   const [categoriaId, setCategoriaId] = useState('')
@@ -36,7 +46,6 @@ export default function AdminPreguntasPage() {
   const [pendientes, setPendientes] = useState<Pregunta[]>([])
   const [errorRevision, setErrorRevision] = useState('')
   const [cargandoPendientes, setCargandoPendientes] = useState(true)
-
 
   useEffect(() => {
     async function cargarCategorias() {
@@ -51,32 +60,25 @@ export default function AdminPreguntasPage() {
       }
     }
     cargarCategorias()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [supabase])
 
+  // Recarga la lista después de generar preguntas nuevas.
   const cargarPendientes = useCallback(async () => {
-    const { data } = await supabase
-      .from('preguntas')
-      .select('id, categoria_id, pregunta, opciones, respuesta_correcta, dificultad')
-      .eq('revisada', false)
-      .order('created_at', { ascending: false })
-    setPendientes(aPreguntas(data))
+    setPendientes(await consultarPendientes(supabase))
     setCargandoPendientes(false)
   }, [supabase])
 
   useEffect(() => {
-    async function cargarInicial() {
-      const { data } = await supabase
-        .from('preguntas')
-        .select('id, categoria_id, pregunta, opciones, respuesta_correcta, dificultad')
-        .eq('revisada', false)
-        .order('created_at', { ascending: false })
-      setPendientes(aPreguntas(data))
+    let cancelado = false
+    consultarPendientes(supabase).then((lista) => {
+      if (cancelado) return
+      setPendientes(lista)
       setCargandoPendientes(false)
+    })
+    return () => {
+      cancelado = true
     }
-    cargarInicial()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [supabase])
 
   async function generar() {
     if (!categoriaId) return

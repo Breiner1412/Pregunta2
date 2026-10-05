@@ -76,7 +76,7 @@ function AnilloTiempo({ tiempoRestante, segundos }: { tiempoRestante: number; se
 }
 
 export default function JugarPage() {
-  const supabase = createClient()
+  const [supabase] = useState(createClient)
 
   const [estado, setEstado] = useState<EstadoJuego>('seleccion')
   const [categorias, setCategorias] = useState<Categoria[]>([])
@@ -120,8 +120,7 @@ export default function JugarPage() {
       if (data) setCategorias(data)
     }
     cargarCategorias()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [supabase])
 
   useEffect(() => {
     async function cargarSesion() {
@@ -144,8 +143,7 @@ export default function JugarPage() {
       setCargandoSesion(false)
     }
     cargarSesion()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [supabase])
 
   async function cerrarSesion() {
     await supabase.auth.signOut()

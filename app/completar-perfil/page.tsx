@@ -6,7 +6,7 @@ import { createClient } from '@/lib/supabase/client'
 import { rutaInternaSegura } from '@/lib/redireccion'
 
 function CompletarPerfilForm() {
-  const supabase = createClient()
+  const [supabase] = useState(createClient)
   const router = useRouter()
   const searchParams = useSearchParams()
   const next = rutaInternaSegura(searchParams.get('next'))
@@ -42,8 +42,7 @@ function CompletarPerfilForm() {
       setCargando(false)
     }
     verificar()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [supabase, router, next])
 
   async function guardarPerfil(e: React.FormEvent) {
     e.preventDefault()

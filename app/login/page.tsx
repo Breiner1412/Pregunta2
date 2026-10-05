@@ -24,7 +24,7 @@ export default function LoginPage() {
 }
 
 function LoginForm() {
-  const supabase = createClient()
+  const [supabase] = useState(createClient)
   const router = useRouter()
   const searchParams = useSearchParams()
 
