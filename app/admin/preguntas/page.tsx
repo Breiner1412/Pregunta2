@@ -19,6 +19,7 @@ export default function AdminPreguntasPage() {
   const [mensaje, setMensaje] = useState('')
 
   const [pendientes, setPendientes] = useState<Pregunta[]>([])
+  const [errorRevision, setErrorRevision] = useState('')
   const [cargandoPendientes, setCargandoPendientes] = useState(true)
 
 
@@ -98,15 +99,25 @@ export default function AdminPreguntasPage() {
   }
 
   // Aprobar y rechazar pasan por el servidor, que vuelve a verificar el rol.
-  async function aprobar(id: string) {
-    await fetch(`/api/admin/preguntas/${id}`, { method: 'PATCH' })
-    setPendientes((prev) => prev.filter((p) => p.id !== id))
+  // La pregunta solo se quita de la lista si el servidor confirmó el cambio.
+  async function revisar(id: string, metodo: 'PATCH' | 'DELETE') {
+    const accion = metodo === 'PATCH' ? 'aprobar' : 'rechazar'
+    setErrorRevision('')
+    try {
+      const res = await fetch(`/api/admin/preguntas/${id}`, { method: metodo })
+      if (!res.ok) {
+        const data = await res.json().catch(() => null)
+        setErrorRevision(`No se pudo ${accion} la pregunta: ${data?.error ?? `error ${res.status}`}`)
+        return
+      }
+      setPendientes((prev) => prev.filter((p) => p.id !== id))
+    } catch {
+      setErrorRevision(`Error de red al ${accion} la pregunta.`)
+    }
   }
 
-  async function rechazar(id: string) {
-    await fetch(`/api/admin/preguntas/${id}`, { method: 'DELETE' })
-    setPendientes((prev) => prev.filter((p) => p.id !== id))
-  }
+  const aprobar = (id: string) => revisar(id, 'PATCH')
+  const rechazar = (id: string) => revisar(id, 'DELETE')
 
   function nombreCategoria(id: string) {
     return categorias.find((c) => c.id === id)?.nombre ?? '???'
@@ -181,6 +192,8 @@ export default function AdminPreguntasPage() {
       <h2 className="text-xl font-bold mb-4">
         Pendientes de revisión {pendientes.length > 0 && `(${pendientes.length})`}
       </h2>
+
+      {errorRevision && <p className="text-sm text-bad mb-4">{errorRevision}</p>}
 
       {cargandoPendientes ? (
         <p className="text-ink-soft">Cargando...</p>
