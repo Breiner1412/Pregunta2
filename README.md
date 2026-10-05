@@ -62,8 +62,8 @@ etc.) sin que nadie lo note antes de publicarse.
 Dos cosas que muchos tutoriales de "trivia con Next.js + Supabase" pasan
 por alto:
 
-- **La respuesta correcta nunca viaja al cliente antes de responder.** Las preguntas se sirven sin el campo `respuesta_correcta` (ver `PreguntaJuego` en `types/game.ts`); cada respuesta se valida contra la base de datos en `api/responder`, el único lugar que conoce la respuesta correcta — y se la revela al cliente *después* de que responde.
-- **El puntaje final se recalcula por completo en el servidor** (`api/guardar-partida`) a partir de las respuestas crudas y los datos reales de la base — el cliente puede reportar lo que quiera, el servidor lo ignora y calcula la verdad desde cero antes de guardar nada.
+- **La partida vive en el servidor.** El servidor sirve una pregunta a la vez, sin el campo `respuesta_correcta` (ver `PreguntaJuego` en `types/game.ts`), mide el tiempo con su propio reloj, corrige cada respuesta una sola vez y lleva vidas y puntaje (`api/partida`). El navegador solo dice qué opción eligió.
+- **El puntaje solo lo escribe el servidor.** Las funciones de partida de `supabase/schema.sql` solo las puede ejecutar la `service_role`, y cada paso es una transacción. El navegador no tiene permiso para escribir partidas, puntajes ni el ranking.
 
 ## 🛠️ Stack
 
@@ -148,10 +148,9 @@ app/
   ranking/                    → ranking global por categoría
   admin/preguntas/              → generar y revisar preguntas de IA
   api/
-    responder/                    → valida cada respuesta contra la base de datos
-    guardar-partida/                → recalcula el puntaje final en el servidor
+    partida/                      → inicia la partida, sirve preguntas y corrige respuestas
     admin/generar-preguntas/          → llama a Gemini y guarda preguntas sin revisar
-lib/supabase/                  → clientes de Supabase (navegador / servidor)
+lib/supabase/                  → clientes de Supabase (navegador / servidor / service_role)
 supabase/schema.sql              → tablas, políticas RLS y funciones, listo para correr
 ```
 

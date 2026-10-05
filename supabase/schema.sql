@@ -74,6 +74,11 @@ create table if not exists trivia.partidas (
   preguntas_correctas integer default 0,
   preguntas_totales integer default 0,
   finalizada boolean default false,
+  -- Estado de la partida en curso: lo maneja solo el servidor.
+  vidas smallint not null default 3,
+  pregunta_actual_id uuid references trivia.preguntas(id) on delete set null,
+  pregunta_servida_at timestamptz,
+  finalizada_at timestamptz,
   created_at timestamptz default now()
 );
 
@@ -156,6 +161,257 @@ as $$
     mejor_puntaje = greatest(trivia.mejores_puntajes.mejor_puntaje, excluded.mejor_puntaje),
     partidas_jugadas = trivia.mejores_puntajes.partidas_jugadas + 1,
     updated_at = now();
+$$;
+
+-- --------------------------------------------
+-- Partida con estado en el servidor
+-- --------------------------------------------
+-- El navegador nunca calcula ni envía el puntaje: el servidor sirve una
+-- pregunta a la vez, mide el tiempo con su propio reloj, corrige la
+-- respuesta y lleva vidas y puntaje. Estas funciones solo las ejecuta
+-- service_role (desde las rutas de app/api/partida), y cada llamada es
+-- una transacción: o se guarda todo o no se guarda nada.
+
+-- Bloquea la partida para esta transacción y comprueba que sea del usuario.
+-- Las partidas de invitado (usuario_id null) se identifican solo por su id.
+create or replace function trivia._bloquear_partida(p_partida uuid, p_usuario uuid)
+returns trivia.partidas
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_partida trivia.partidas;
+begin
+  select * into v_partida from trivia.partidas where id = p_partida for update;
+
+  if not found or (v_partida.usuario_id is not null and v_partida.usuario_id is distinct from p_usuario) then
+    raise exception 'partida_no_encontrada' using errcode = 'P0002';
+  end if;
+
+  return v_partida;
+end;
+$$;
+
+-- Cierra la partida (si no estaba cerrada) y, si es de un usuario con
+-- perfil, suma a sus totales y actualiza su mejor puntaje. Devuelve el
+-- resultado final.
+create or replace function trivia._finalizar_partida(p_partida uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_partida trivia.partidas;
+begin
+  update trivia.partidas
+  set finalizada = true,
+      finalizada_at = now(),
+      pregunta_actual_id = null,
+      pregunta_servida_at = null
+  where id = p_partida and not finalizada
+  returning * into v_partida;
+
+  if found and v_partida.usuario_id is not null then
+    update trivia.perfiles
+    set puntaje_total = puntaje_total + v_partida.puntaje,
+        partidas_jugadas = partidas_jugadas + 1
+    where id = v_partida.usuario_id;
+
+    insert into trivia.mejores_puntajes (usuario_id, categoria_id, mejor_puntaje, partidas_jugadas)
+    values (v_partida.usuario_id, v_partida.categoria_id, v_partida.puntaje, 1)
+    on conflict (usuario_id, coalesce(categoria_id, '00000000-0000-0000-0000-000000000000'::uuid))
+    do update set
+      mejor_puntaje = greatest(trivia.mejores_puntajes.mejor_puntaje, excluded.mejor_puntaje),
+      partidas_jugadas = trivia.mejores_puntajes.partidas_jugadas + 1,
+      updated_at = now();
+  end if;
+
+  select * into v_partida from trivia.partidas where id = p_partida;
+
+  return jsonb_build_object(
+    'correctas', v_partida.preguntas_correctas,
+    'puntaje', v_partida.puntaje,
+    'total_respondidas', v_partida.preguntas_totales
+  );
+end;
+$$;
+
+-- Crea una partida. Un usuario de auth sin perfil de trivia (por ejemplo,
+-- alguien que solo usa la otra app) juega como invitado.
+create or replace function trivia.iniciar_partida(p_usuario uuid, p_categoria uuid)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_usuario uuid;
+  v_id uuid;
+begin
+  if p_categoria is not null
+     and not exists (select 1 from trivia.categorias where id = p_categoria and activa) then
+    raise exception 'categoria_no_encontrada' using errcode = 'P0002';
+  end if;
+
+  select id into v_usuario from trivia.perfiles where id = p_usuario;
+
+  insert into trivia.partidas (usuario_id, modo, categoria_id)
+  values (
+    v_usuario,
+    case when p_categoria is null then 'mixto' else 'categoria_unica' end,
+    p_categoria
+  )
+  returning id into v_id;
+
+  return v_id;
+end;
+$$;
+
+-- Devuelve la pregunta en juego (sin la respuesta correcta). Si ya había
+-- una servida y sin responder, devuelve la misma sin reiniciar el reloj.
+-- Si no quedan preguntas, cierra la partida.
+create or replace function trivia.servir_siguiente_pregunta(p_partida uuid, p_usuario uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_partida trivia.partidas;
+  v_pregunta_id uuid;
+  v_pregunta jsonb;
+begin
+  v_partida := trivia._bloquear_partida(p_partida, p_usuario);
+
+  if v_partida.finalizada then
+    return jsonb_build_object('terminada', true, 'resultado', trivia._finalizar_partida(p_partida));
+  end if;
+
+  v_pregunta_id := v_partida.pregunta_actual_id;
+
+  if v_pregunta_id is null then
+    -- Dificultad progresiva: 1, 2, 3, 4, 5, 1, 2... tomando la más cercana
+    -- disponible, al azar entre las de igual distancia.
+    select p.id into v_pregunta_id
+    from trivia.preguntas p
+    where p.activa
+      and p.revisada
+      and (v_partida.modo = 'mixto' or p.categoria_id = v_partida.categoria_id)
+      and not exists (
+        select 1 from trivia.respuestas_partida r
+        where r.partida_id = v_partida.id and r.pregunta_id = p.id
+      )
+    order by abs(p.dificultad - (v_partida.preguntas_totales % 5 + 1)), random()
+    limit 1;
+
+    if v_pregunta_id is null then
+      return jsonb_build_object('terminada', true, 'resultado', trivia._finalizar_partida(p_partida));
+    end if;
+
+    update trivia.partidas
+    set pregunta_actual_id = v_pregunta_id,
+        pregunta_servida_at = now()
+    where id = v_partida.id;
+  end if;
+
+  select jsonb_build_object(
+    'id', p.id,
+    'categoria_id', p.categoria_id,
+    'pregunta', p.pregunta,
+    'opciones', p.opciones,
+    'dificultad', p.dificultad
+  ) into v_pregunta
+  from trivia.preguntas p
+  where p.id = v_pregunta_id;
+
+  return jsonb_build_object(
+    'terminada', false,
+    'pregunta', v_pregunta,
+    'numero', v_partida.preguntas_totales + 1,
+    'vidas', v_partida.vidas,
+    'puntaje', v_partida.puntaje
+  );
+end;
+$$;
+
+-- Corrige la respuesta a la pregunta en juego (una sola vez). El tiempo
+-- se mide desde que el servidor sirvió la pregunta, con un margen para
+-- la latencia de red; pasado ese margen la respuesta cuenta como fallo.
+create or replace function trivia.responder_pregunta(
+  p_partida uuid,
+  p_usuario uuid,
+  p_pregunta uuid,
+  p_respuesta int
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  c_duracion_ms constant int := 15000;
+  c_margen_red_ms constant int := 2000;
+  v_partida trivia.partidas;
+  v_respuesta_correcta int;
+  v_dificultad int;
+  v_tiempo_ms int;
+  v_correcta boolean;
+  v_puntos int;
+begin
+  v_partida := trivia._bloquear_partida(p_partida, p_usuario);
+
+  if v_partida.finalizada then
+    raise exception 'partida_finalizada' using errcode = 'P0001';
+  end if;
+
+  if p_pregunta is null or v_partida.pregunta_actual_id is distinct from p_pregunta then
+    raise exception 'pregunta_no_vigente' using errcode = 'P0001';
+  end if;
+
+  select respuesta_correcta, dificultad into v_respuesta_correcta, v_dificultad
+  from trivia.preguntas
+  where id = p_pregunta;
+
+  v_tiempo_ms := greatest(0, floor(extract(epoch from (now() - v_partida.pregunta_servida_at)) * 1000))::int;
+  v_correcta := p_respuesta is not null
+    and p_respuesta = v_respuesta_correcta
+    and v_tiempo_ms <= c_duracion_ms + c_margen_red_ms;
+  v_tiempo_ms := least(v_tiempo_ms, c_duracion_ms);
+
+  v_puntos := case
+    when v_correcta then
+      round(100 * v_dificultad * (1 + greatest(0, 1 - v_tiempo_ms::numeric / c_duracion_ms)))::int
+    else 0
+  end;
+
+  insert into trivia.respuestas_partida
+    (partida_id, pregunta_id, respuesta_dada, correcta, tiempo_respuesta_ms, dificultad_en_momento)
+  values
+    (v_partida.id, p_pregunta, p_respuesta, v_correcta, v_tiempo_ms, v_dificultad);
+
+  update trivia.preguntas set veces_usada = veces_usada + 1 where id = p_pregunta;
+
+  update trivia.partidas
+  set puntaje = puntaje + v_puntos,
+      preguntas_correctas = preguntas_correctas + v_correcta::int,
+      preguntas_totales = preguntas_totales + 1,
+      vidas = vidas - (not v_correcta)::int,
+      pregunta_actual_id = null,
+      pregunta_servida_at = null
+  where id = v_partida.id
+  returning * into v_partida;
+
+  return jsonb_build_object(
+    'correcta', v_correcta,
+    'respuesta_correcta', v_respuesta_correcta,
+    'vidas', v_partida.vidas,
+    'puntaje', v_partida.puntaje,
+    'terminada', v_partida.vidas <= 0,
+    'resultado', case when v_partida.vidas <= 0 then trivia._finalizar_partida(v_partida.id) end
+  );
+end;
 $$;
 
 -- Posición exacta de un usuario dentro de una categoría (o Mezclado)
@@ -306,6 +562,15 @@ revoke insert, update, delete, truncate on trivia.categorias from anon, authenti
 -- Las partidas y sus respuestas solo las escribe el servidor (service_role).
 revoke insert, update, delete, truncate on trivia.partidas, trivia.respuestas_partida
   from anon, authenticated;
+
+-- El flujo de partida solo lo ejecuta el servidor.
+revoke execute on function
+  trivia._bloquear_partida(uuid, uuid),
+  trivia._finalizar_partida(uuid),
+  trivia.iniciar_partida(uuid, uuid),
+  trivia.servir_siguiente_pregunta(uuid, uuid),
+  trivia.responder_pregunta(uuid, uuid, uuid, int)
+  from public, anon, authenticated;
 
 
 -- ============================================

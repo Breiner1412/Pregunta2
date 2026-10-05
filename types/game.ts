@@ -26,12 +26,26 @@ export interface PreguntaJuego {
 
 export type EstadoJuego = 'seleccion' | 'jugando' | 'resultado'
 
-export interface RespuestaUsuario {
-  pregunta_id: string
-  respuesta_dada: number | null
+// La partida vive en el servidor: estas son sus respuestas a cada paso.
+export interface ResultadoPartida {
+  correctas: number
+  puntaje: number
+  total_respondidas: number
+}
+
+export type PasoPartida =
+  | { terminada: false; pregunta: PreguntaJuego; numero: number; vidas: number; puntaje: number }
+  | { terminada: true; resultado: ResultadoPartida }
+
+export type PartidaIniciada = PasoPartida & { partida_id: string }
+
+export interface RespuestaVerificada {
   correcta: boolean
-  tiempo_respuesta_ms: number
-  dificultad_en_momento: number
+  respuesta_correcta: number
+  vidas: number
+  puntaje: number
+  terminada: boolean
+  resultado: ResultadoPartida | null
 }
 
 export interface PerfilRanking {
