@@ -1,6 +1,7 @@
 import 'server-only'
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import { identificarCliente, permitirPeticion, type LimiteTasa } from '@/lib/rate-limit'
 
 const PATRON_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -28,6 +29,27 @@ export async function obtenerUsuarioId(): Promise<string | null> {
     data: { user },
   } = await supabase.auth.getUser()
   return user?.id ?? null
+}
+
+// Una partida normal hace una petición cada pocos segundos; esto solo frena
+// scripts que inician partidas o responden en ráfaga.
+const LIMITES: Record<'iniciar' | 'jugar', LimiteTasa> = {
+  iniciar: { maximo: 20, ventanaMs: 10 * 60 * 1000 },
+  jugar: { maximo: 60, ventanaMs: 60 * 1000 },
+}
+
+// Devuelve una respuesta 429 si el cliente superó el límite, o null si puede seguir.
+export function limitarTasa(
+  request: Request,
+  usuarioId: string | null,
+  accion: keyof typeof LIMITES
+): NextResponse | null {
+  const clave = `${accion}:${identificarCliente(request, usuarioId)}`
+  if (permitirPeticion(clave, LIMITES[accion])) return null
+  return NextResponse.json(
+    { error: 'Demasiadas peticiones, espera un momento' },
+    { status: 429 }
+  )
 }
 
 export function datosInvalidos() {

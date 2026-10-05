@@ -4,6 +4,7 @@ import {
   datosInvalidos,
   esUuid,
   leerCuerpo,
+  limitarTasa,
   obtenerUsuarioId,
   respuestaDeError,
 } from '@/lib/partida'
@@ -18,6 +19,9 @@ export async function POST(request: Request) {
   }
 
   const usuarioId = await obtenerUsuarioId()
+  const limitado = limitarTasa(request, usuarioId, 'iniciar')
+  if (limitado) return limitado
+
   const admin = createAdminClient()
 
   const { data: partidaId, error } = await admin.rpc('iniciar_partida', {
